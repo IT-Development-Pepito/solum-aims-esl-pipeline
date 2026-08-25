@@ -9,14 +9,18 @@ from esl_service.config import (
     AclEntry,
     AclInspection,
     ResolvedWindowsIdentity,
+    ResolvedWindowsServiceAccount,
     Settings,
     WindowsSecretBundleAclReader,
     WindowsSecretBundlePathValidator,
+    WindowsServiceAccountResolver,
     WindowsServiceIdentityResolver,
     WindowsServiceIdentityValidator,
 )
 
 _SERVICE_SID = "S-1-5-21-111-222-333-4444"
+_SERVICE_NAME = "SOLUMESL"
+_PER_SERVICE_SID = "S-1-5-80-111-222-333-444-555"
 _WINDOWS_SID_TYPE_USER = 1
 _WINDOWS_SID_TYPE_GROUP = 2
 _WINDOWS_SID_TYPE_WELL_KNOWN_GROUP = 5
@@ -33,6 +37,19 @@ class _StaticServiceIdentityResolver:
             raise ValueError("service_identity_sid could not be verified") from None
 
 
+class _StaticWindowsServiceAccountResolver:
+    def __init__(
+        self, services: dict[str, ResolvedWindowsServiceAccount]
+    ) -> None:
+        self._services = {name.casefold(): service for name, service in services.items()}
+
+    def resolve(self, service_name: str) -> ResolvedWindowsServiceAccount:
+        try:
+            return self._services[service_name.casefold()]
+        except KeyError:
+            raise ValueError("windows_service_name could not be verified") from None
+
+
 @pytest.fixture(autouse=True)
 def _inject_test_service_identity_resolver(
     monkeypatch: pytest.MonkeyPatch,
@@ -43,11 +60,19 @@ def _inject_test_service_identity_resolver(
         domain="TEST",
         account_type=_WINDOWS_SID_TYPE_USER,
     )
+    service_account = ResolvedWindowsServiceAccount(
+        service_name=_SERVICE_NAME,
+        account_name="test-esl-service",
+        domain="TEST",
+        sid=_SERVICE_SID,
+        account_type=_WINDOWS_SID_TYPE_USER,
+    )
     monkeypatch.setattr(
         Settings,
         "service_identity_validator_factory",
         lambda: WindowsServiceIdentityValidator(
-            _StaticServiceIdentityResolver({_SERVICE_SID: identity})
+            _StaticServiceIdentityResolver({_SERVICE_SID: identity}),
+            _StaticWindowsServiceAccountResolver({_SERVICE_NAME: service_account}),
         ),
     )
 
@@ -63,6 +88,33 @@ def test_production_requires_internal_host() -> None:
         )
 
 
+@pytest.mark.parametrize("environment", ["development", "staging"])
+def test_cli_environments_do_not_require_windows_service_name(
+    environment: str,
+) -> None:
+    settings = Settings.model_validate(
+        {
+            "environment": environment,
+            "database_url": "postgresql://state",
+            "internal_host": "localhost",
+        }
+    )
+
+    assert settings.windows_service_name == ""
+
+
+def test_production_requires_windows_service_name() -> None:
+    with pytest.raises(ValidationError, match="windows_service_name"):
+        Settings.model_validate(
+            {
+                "environment": "production",
+                "database_url": "postgresql://state",
+                "internal_host": "esl.internal",
+                "service_identity_sid": _SERVICE_SID,
+            }
+        )
+
+
 def test_production_rejects_relative_secret_bundle_path() -> None:
     with pytest.raises(ValidationError, match="secret_bundle_path"):
         Settings.model_validate(
@@ -72,6 +124,7 @@ def test_production_rejects_relative_secret_bundle_path() -> None:
                 "internal_host": "esl.internal",
                 "secret_bundle_path": "secrets.dpapi",
                 "service_identity_sid": _SERVICE_SID,
+                "windows_service_name": _SERVICE_NAME,
             }
         )
 
@@ -85,6 +138,7 @@ def test_production_rejects_secret_bundle_path_outside_programdata() -> None:
                 "internal_host": "esl.internal",
                 "secret_bundle_path": r"D:\workspace\secrets.dpapi",
                 "service_identity_sid": _SERVICE_SID,
+                "windows_service_name": _SERVICE_NAME,
             }
         )
 
@@ -97,6 +151,7 @@ def test_production_requires_service_identity_sid() -> None:
                 "database_url": "postgresql://state",
                 "internal_host": "esl.internal",
                 "secret_bundle_path": r"C:\ProgramData\SOLUM\ESL\secrets.dpapi",
+                "windows_service_name": _SERVICE_NAME,
             }
         )
 
@@ -122,6 +177,7 @@ def test_production_rejects_insecure_secret_bundle_acl(
                 "internal_host": "esl.internal",
                 "secret_bundle_path": r"C:\ProgramData\SOLUM\ESL\secrets.dpapi",
                 "service_identity_sid": _SERVICE_SID,
+                "windows_service_name": _SERVICE_NAME,
             },
         )
 
@@ -158,6 +214,7 @@ def test_production_uses_trusted_known_folder_not_process_environment(
             "internal_host": "esl.internal",
             "secret_bundle_path": r"C:\TrustedProgramData\SOLUM\ESL\secrets.dpapi",
             "service_identity_sid": _SERVICE_SID,
+            "windows_service_name": _SERVICE_NAME,
         }
     )
 
@@ -338,6 +395,63 @@ def test_windows_identity_resolver_parses_and_looks_up_sid(
     )
 
 
+def test_windows_service_account_resolver_queries_configured_service(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    parsed_sid = object()
+    closed_handles: list[str] = []
+    monkeypatch.setitem(
+        sys.modules,
+        "win32service",
+        SimpleNamespace(
+            SC_MANAGER_CONNECT=1,
+            SERVICE_QUERY_CONFIG=1,
+            OpenSCManager=lambda *_: "scm-handle",
+            OpenService=lambda *_: "service-handle",
+            QueryServiceConfig=lambda _handle: (
+                16,
+                2,
+                1,
+                r"C:\Program Files\SOLUM\esl-service.exe",
+                "",
+                0,
+                (),
+                r"TEST\test-esl-service",
+                "SOLUM ESL Service",
+            ),
+            CloseServiceHandle=closed_handles.append,
+        ),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "win32security",
+        SimpleNamespace(
+            LookupAccountName=lambda _system, _account: (
+                parsed_sid,
+                "TEST",
+                _WINDOWS_SID_TYPE_USER,
+            ),
+            LookupAccountSid=lambda _system, _sid: (
+                "test-esl-service",
+                "TEST",
+                _WINDOWS_SID_TYPE_USER,
+            ),
+            ConvertSidToStringSid=lambda _sid: _SERVICE_SID,
+        ),
+    )
+
+    service_account = WindowsServiceAccountResolver().resolve(_SERVICE_NAME)
+
+    assert service_account == ResolvedWindowsServiceAccount(
+        service_name=_SERVICE_NAME,
+        account_name="test-esl-service",
+        domain="TEST",
+        sid=_SERVICE_SID,
+        account_type=_WINDOWS_SID_TYPE_USER,
+    )
+    assert closed_handles == ["service-handle", "scm-handle"]
+
+
 @pytest.mark.parametrize(
     ("identity", "reason"),
     [
@@ -383,39 +497,168 @@ def test_service_identity_validator_rejects_broad_or_group_principals(
     identity: ResolvedWindowsIdentity,
     reason: str,
 ) -> None:
+    service_account = ResolvedWindowsServiceAccount(
+        _SERVICE_NAME,
+        "test-esl-service",
+        "TEST",
+        _SERVICE_SID,
+        _WINDOWS_SID_TYPE_USER,
+    )
     validator = WindowsServiceIdentityValidator(
-        _StaticServiceIdentityResolver({identity.sid: identity})
+        _StaticServiceIdentityResolver({identity.sid: identity}),
+        _StaticWindowsServiceAccountResolver({_SERVICE_NAME: service_account}),
     )
 
     with pytest.raises(ValueError, match="real service account or service SID"):
-        validator.validate(identity.sid)
+        validator.validate(identity.sid, _SERVICE_NAME)
+
+
+def test_service_identity_validator_rejects_all_services() -> None:
+    identity = ResolvedWindowsIdentity(
+        "S-1-5-80-0",
+        "ALL SERVICES",
+        "NT SERVICE",
+        _WINDOWS_SID_TYPE_WELL_KNOWN_GROUP,
+    )
+    service_account = ResolvedWindowsServiceAccount(
+        _SERVICE_NAME,
+        "test-esl-service",
+        "TEST",
+        _SERVICE_SID,
+        _WINDOWS_SID_TYPE_USER,
+    )
+    validator = WindowsServiceIdentityValidator(
+        _StaticServiceIdentityResolver({identity.sid: identity}),
+        _StaticWindowsServiceAccountResolver({_SERVICE_NAME: service_account}),
+    )
+
+    with pytest.raises(ValueError, match="real service account or service SID"):
+        validator.validate(identity.sid, _SERVICE_NAME)
+
+
+def test_service_identity_validator_rejects_builtin_administrator_even_if_bound() -> None:
+    administrator_sid = "S-1-5-21-111-222-333-500"
+    identity = ResolvedWindowsIdentity(
+        administrator_sid,
+        "Administrator",
+        "TEST-HOST",
+        _WINDOWS_SID_TYPE_USER,
+    )
+    service_account = ResolvedWindowsServiceAccount(
+        _SERVICE_NAME,
+        "Administrator",
+        "TEST-HOST",
+        administrator_sid,
+        _WINDOWS_SID_TYPE_USER,
+    )
+    validator = WindowsServiceIdentityValidator(
+        _StaticServiceIdentityResolver({administrator_sid: identity}),
+        _StaticWindowsServiceAccountResolver({_SERVICE_NAME: service_account}),
+    )
+
+    with pytest.raises(ValueError, match="real service account or service SID"):
+        validator.validate(administrator_sid, _SERVICE_NAME)
+
+
+def test_service_identity_validator_rejects_user_not_bound_to_service() -> None:
+    identity = ResolvedWindowsIdentity(
+        _SERVICE_SID,
+        "test-esl-service",
+        "TEST",
+        _WINDOWS_SID_TYPE_USER,
+    )
+    service_account = ResolvedWindowsServiceAccount(
+        _SERVICE_NAME,
+        "different-service-account",
+        "TEST",
+        "S-1-5-21-111-222-333-5555",
+        _WINDOWS_SID_TYPE_USER,
+    )
+    validator = WindowsServiceIdentityValidator(
+        _StaticServiceIdentityResolver({_SERVICE_SID: identity}),
+        _StaticWindowsServiceAccountResolver({_SERVICE_NAME: service_account}),
+    )
+
+    with pytest.raises(ValueError, match="real service account or service SID"):
+        validator.validate(_SERVICE_SID, _SERVICE_NAME)
 
 
 @pytest.mark.parametrize(
-    "identity",
+    "invalid_service_sid",
     [
-        ResolvedWindowsIdentity(
-            _SERVICE_SID,
-            "test-esl-service",
-            "TEST",
-            _WINDOWS_SID_TYPE_USER,
-        ),
-        ResolvedWindowsIdentity(
-            "S-1-5-80-111-222-333-444-555",
-            "test-esl-service",
-            "NT SERVICE",
-            _WINDOWS_SID_TYPE_WELL_KNOWN_GROUP,
-        ),
+        "S-1-5-80-111-222-333-444",
+        "S-1-5-80-111-222-333-444-555-666",
     ],
 )
-def test_service_identity_validator_accepts_real_service_identity(
-    identity: ResolvedWindowsIdentity,
+def test_service_identity_validator_rejects_noncanonical_per_service_sid_shape(
+    invalid_service_sid: str,
 ) -> None:
+    identity = ResolvedWindowsIdentity(
+        invalid_service_sid,
+        _SERVICE_NAME,
+        "NT SERVICE",
+        _WINDOWS_SID_TYPE_WELL_KNOWN_GROUP,
+    )
+    service_account = ResolvedWindowsServiceAccount(
+        _SERVICE_NAME,
+        "test-esl-service",
+        "TEST",
+        _SERVICE_SID,
+        _WINDOWS_SID_TYPE_USER,
+    )
     validator = WindowsServiceIdentityValidator(
-        _StaticServiceIdentityResolver({identity.sid: identity})
+        _StaticServiceIdentityResolver({invalid_service_sid: identity}),
+        _StaticWindowsServiceAccountResolver({_SERVICE_NAME: service_account}),
     )
 
-    assert validator.validate(identity.sid.lower()) == identity.sid
+    with pytest.raises(ValueError, match="real service account or service SID"):
+        validator.validate(invalid_service_sid, _SERVICE_NAME)
+
+
+def test_service_identity_validator_accepts_exact_per_service_sid() -> None:
+    identity = ResolvedWindowsIdentity(
+        _PER_SERVICE_SID,
+        _SERVICE_NAME,
+        "NT SERVICE",
+        _WINDOWS_SID_TYPE_WELL_KNOWN_GROUP,
+    )
+    service_account = ResolvedWindowsServiceAccount(
+        _SERVICE_NAME,
+        "test-esl-service",
+        "TEST",
+        _SERVICE_SID,
+        _WINDOWS_SID_TYPE_USER,
+    )
+    validator = WindowsServiceIdentityValidator(
+        _StaticServiceIdentityResolver({_PER_SERVICE_SID: identity}),
+        _StaticWindowsServiceAccountResolver({_SERVICE_NAME: service_account}),
+    )
+
+    assert validator.validate(_PER_SERVICE_SID.lower(), _SERVICE_NAME.lower()) == (
+        _PER_SERVICE_SID
+    )
+
+
+def test_service_identity_validator_accepts_user_bound_to_service_account() -> None:
+    identity = ResolvedWindowsIdentity(
+        _SERVICE_SID,
+        "test-esl-service",
+        "TEST",
+        _WINDOWS_SID_TYPE_USER,
+    )
+    service_account = ResolvedWindowsServiceAccount(
+        _SERVICE_NAME,
+        "test-esl-service",
+        "TEST",
+        _SERVICE_SID,
+        _WINDOWS_SID_TYPE_USER,
+    )
+    validator = WindowsServiceIdentityValidator(
+        _StaticServiceIdentityResolver({_SERVICE_SID: identity}),
+        _StaticWindowsServiceAccountResolver({_SERVICE_NAME: service_account}),
+    )
+
+    assert validator.validate(_SERVICE_SID.lower(), _SERVICE_NAME.lower()) == _SERVICE_SID
 
 
 @pytest.mark.parametrize("service_sid", ["not-a-sid", "S-1-1-0", "S-1-5-32-544"])
@@ -430,5 +673,6 @@ def test_production_rejects_invalid_or_broad_service_identity_sid(
                 "internal_host": "esl.internal",
                 "secret_bundle_path": r"C:\ProgramData\SOLUM\ESL\secrets.dpapi",
                 "service_identity_sid": service_sid,
+                "windows_service_name": _SERVICE_NAME,
             }
         )

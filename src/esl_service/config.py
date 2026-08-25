@@ -1,10 +1,11 @@
 """Runtime configuration and Windows secret-bundle trust boundary."""
 
 import ctypes
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import ClassVar, Literal, Protocol
+from typing import ClassVar, Literal, NoReturn, Protocol
 
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -90,10 +91,80 @@ class WindowsServiceIdentityResolver:
             raise ValueError("service_identity_sid could not be verified") from None
 
 
+@dataclass(frozen=True)
+class ResolvedWindowsServiceAccount:
+    """Account configured to run one named Windows service."""
+
+    service_name: str
+    account_name: str
+    domain: str
+    sid: str
+    account_type: int
+
+
+class ServiceAccountResolver(Protocol):
+    """Resolves the logon identity configured for a named Windows service."""
+
+    def resolve(self, service_name: str) -> ResolvedWindowsServiceAccount: ...
+
+
+class WindowsServiceAccountResolver:
+    """Reads a service's configured logon account through Windows APIs."""
+
+    def resolve(self, service_name: str) -> ResolvedWindowsServiceAccount:
+        normalized_service_name = service_name.strip()
+        if not normalized_service_name:
+            raise ValueError("windows_service_name could not be verified")
+
+        service_manager = None
+        service = None
+        try:
+            import win32security
+            import win32service  # type: ignore[import-untyped]
+
+            service_manager = win32service.OpenSCManager(
+                None, None, win32service.SC_MANAGER_CONNECT
+            )
+            service = win32service.OpenService(
+                service_manager,
+                normalized_service_name,
+                win32service.SERVICE_QUERY_CONFIG,
+            )
+            configuration = win32service.QueryServiceConfig(service)
+            service_start_name = configuration[7]
+            if not isinstance(service_start_name, str) or not service_start_name.strip():
+                raise ValueError
+            account_sid, _, account_type = win32security.LookupAccountName(
+                None, service_start_name
+            )
+            account_name, domain, resolved_account_type = (
+                win32security.LookupAccountSid(None, account_sid)
+            )
+            if account_type != resolved_account_type:
+                raise ValueError
+            canonical_sid = win32security.ConvertSidToStringSid(account_sid).upper()
+            if not account_name.strip() or not domain.strip():
+                raise ValueError
+            return ResolvedWindowsServiceAccount(
+                service_name=normalized_service_name,
+                account_name=account_name,
+                domain=domain,
+                sid=canonical_sid,
+                account_type=resolved_account_type,
+            )
+        except Exception:  # noqa: BLE001
+            raise ValueError("windows_service_name could not be verified") from None
+        finally:
+            if service is not None:
+                win32service.CloseServiceHandle(service)
+            if service_manager is not None:
+                win32service.CloseServiceHandle(service_manager)
+
+
 class ServiceIdentityValidator(Protocol):
     """Accepts only a resolved service account or per-service SID."""
 
-    def validate(self, sid: str) -> str: ...
+    def validate(self, sid: str, service_name: str) -> str: ...
 
 
 class WindowsServiceIdentityValidator:
@@ -101,27 +172,73 @@ class WindowsServiceIdentityValidator:
 
     _SID_TYPE_USER = 1
     _SID_TYPE_WELL_KNOWN_GROUP = 5
-    _SERVICE_SID_PREFIX = "S-1-5-80-"
     _SERVICE_SID_DOMAIN = "NT SERVICE"
+    _ALL_SERVICES_SID = "S-1-5-80-0"
+    _SERVICE_SID_PATTERN = re.compile(
+        r"S-1-5-80-(\d+)-(\d+)-(\d+)-(\d+)-(\d+)"
+    )
+    _MAX_SUBAUTHORITY = 0xFFFFFFFF
+    _BUILTIN_ADMINISTRATOR_RID = "500"
 
-    def __init__(self, resolver: ServiceIdentityResolver | None = None) -> None:
+    def __init__(
+        self,
+        resolver: ServiceIdentityResolver | None = None,
+        service_account_resolver: ServiceAccountResolver | None = None,
+    ) -> None:
         self._resolver = resolver or WindowsServiceIdentityResolver()
+        self._service_account_resolver = (
+            service_account_resolver or WindowsServiceAccountResolver()
+        )
 
-    def validate(self, sid: str) -> str:
+    def validate(self, sid: str, service_name: str) -> str:
         identity = self._resolver.resolve(sid)
         canonical_sid = identity.sid.upper()
-        if sid.strip().upper() != canonical_sid:
-            raise ValueError(
-                "service_identity_sid must identify a real service account or service SID"
-            )
+        normalized_service_name = service_name.strip()
+        if (
+            sid.strip().upper() != canonical_sid
+            or canonical_sid == self._ALL_SERVICES_SID
+            or not normalized_service_name
+        ):
+            self._raise_invalid_identity()
+
+        service_account = self._service_account_resolver.resolve(
+            normalized_service_name
+        )
+        if service_account.service_name.casefold() != normalized_service_name.casefold():
+            self._raise_invalid_identity()
+
         if identity.account_type == self._SID_TYPE_USER:
+            if canonical_sid.rsplit("-", maxsplit=1)[-1] == (
+                self._BUILTIN_ADMINISTRATOR_RID
+            ):
+                self._raise_invalid_identity()
+            if (
+                service_account.account_type != self._SID_TYPE_USER
+                or service_account.sid.upper() != canonical_sid
+                or service_account.account_name.casefold()
+                != identity.account_name.casefold()
+                or service_account.domain.casefold() != identity.domain.casefold()
+            ):
+                self._raise_invalid_identity()
             return canonical_sid
+
+        service_sid_match = self._SERVICE_SID_PATTERN.fullmatch(canonical_sid)
         if (
             identity.account_type == self._SID_TYPE_WELL_KNOWN_GROUP
-            and canonical_sid.startswith(self._SERVICE_SID_PREFIX)
+            and service_sid_match is not None
+            and all(
+                int(subauthority) <= self._MAX_SUBAUTHORITY
+                and str(int(subauthority)) == subauthority
+                for subauthority in service_sid_match.groups()
+            )
             and identity.domain.upper() == self._SERVICE_SID_DOMAIN
+            and identity.account_name.casefold() == normalized_service_name.casefold()
         ):
             return canonical_sid
+        self._raise_invalid_identity()
+
+    @staticmethod
+    def _raise_invalid_identity() -> NoReturn:
         raise ValueError(
             "service_identity_sid must identify a real service account or service SID"
         )
@@ -283,6 +400,7 @@ class Settings(BaseSettings):
     shadow_mode: bool = True
     secret_bundle_path: Path = Path(r"C:\ProgramData\SOLUM\ESL\secrets.dpapi")
     service_identity_sid: str = Field(default="", repr=False)
+    windows_service_name: str = ""
     program_data_directory_provider_factory: ClassVar[
         Callable[[], ProgramDataDirectoryProvider]
     ] = WindowsProgramDataDirectoryProvider
@@ -301,10 +419,12 @@ class Settings(BaseSettings):
             return self
         if not self.service_identity_sid.strip():
             raise ValueError("service_identity_sid must be configured for production")
+        if not self.windows_service_name.strip():
+            raise ValueError("windows_service_name must be configured for production")
         normalized_service_sid = (
             type(self)
             .service_identity_validator_factory()
-            .validate(self.service_identity_sid)
+            .validate(self.service_identity_sid, self.windows_service_name)
         )
 
         canonical_bundle_path = self.secret_bundle_path.resolve(strict=False)
