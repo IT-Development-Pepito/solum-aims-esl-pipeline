@@ -1,6 +1,6 @@
 # Current Phase
 
-Project preparation and requirements gathering continue in this chat. Task 3 has an assigned issue and isolated worktree but remains blocked before database work because no dedicated non-production `ESL_TEST_DATABASE_URL` is available. The automated CSV compatibility contract is approved and its follow-on implementation plan is prepared but deferred until foundation Tasks 3, 6, and 7 and the consumer acceptance gate are complete.
+The **engineering phase began on 2026-08-25** after the dedicated local non-production PostgreSQL test connection was verified. Task 3 durable workflow state is implemented in its assigned isolated worktree and awaits review/commit. The automated CSV compatibility contract remains approved but its follow-on implementation is deferred until foundation Tasks 3, 6, and 7 and the consumer acceptance gate are complete.
 
 
 ## Cross-agent implementation checkpoints
@@ -20,14 +20,14 @@ Append a checkpoint at issue start, after every independently testable task, aft
 
 ### Latest handoff checkpoint
 
-- **Timestamp / owner:** 2026-08-25 17:26 +08:00; Codex Task 3 planning session.
+- **Timestamp / owner:** 2026-08-25 17:49 +08:00; Codex Task 3 engineering session.
 - **Issue:** GitHub #1, `Task 3: add durable PostgreSQL workflow state`, assigned to the authenticated account.
-- **Git state:** local branch `codex/task-3-durable-workflow-state` in `.worktrees/codex-task-3-durable-state`, HEAD `9731e3976c9b9e453a1649e57b0f929830a2a2ae` at checkpoint start; no PR, merge, or push. The approved design, follow-on plan, and reconciled source-of-truth documents are committed; this progress-only checkpoint is the sole uncommitted change.
-- **Scope:** The automated ACL-restricted CSV file/manifest/acknowledgement contract is approved. Its implementation is a separate follow-on plan and does not expand Task 3. No persistence, CSV adapter, scheduler, AIMS, or production behavior was implemented.
-- **Evidence:** The verified legacy SKU CSV has 42 ordered fields, UTF-8 encoding, comma delimiter, DOS line endings, and no header. Local Python 3.12.7 checks recorded 37 tests passing, Ruff passing, and mypy passing.
-- **Configuration:** Task 3 still requires `ESL_TEST_DATABASE_URL` through the approved secret boundary. Future CSV settings are names/contract only; no path, SID, credential, or secret value is stored in documentation.
-- **External state:** no PostgreSQL, SQL Server, AIMS, Jenkins, Hop, physical ESL, or filesystem-delivery action occurred.
-- **Risks / next action:** Task 3 remains blocked on the non-production PostgreSQL URL. The smallest safe next action is to provision `ESL_TEST_DATABASE_URL` outside source control, then write and run the required failing Task 3 lease integration test before implementation.
+- **Git state:** local branch `codex/task-3-durable-workflow-state` in `.worktrees/codex-task-3-durable-state`, base HEAD `81546051a6cfbc10d19463a4fe6b7e12a878b0b3`; no PR, merge, or push. Task 3 source, migration, test, plan correction, and this checkpoint are uncommitted pending review.
+- **Scope:** Implemented Task 3 durable state for FR-017: service-owned workflow executions, exclusive PostgreSQL scope leases, structured execution events/actions, persisted schedules, and a reversible initial Alembic migration. No scheduler, CSV adapter, AIMS access, SQL Server access, or production behavior was added.
+- **Evidence:** The new lease integration test first failed because the persistence module/schema was absent, then passed after migration `0001_operational_state`. Local Python 3.12.7 verification: `python -m pytest -v` — 38 passed; `ruff check src tests alembic` — passed; `python -m mypy src` — passed.
+- **Configuration:** `ESL_TEST_DATABASE_URL` is read from the root `.env` only into the test/migration process; Alembic receives it transiently as `ESL_DATABASE_URL`. No values, paths, SIDs, or credentials are recorded.
+- **External state:** read-only `SELECT 1` confirmed the dedicated local test PostgreSQL connection. Alembic migration `0001_operational_state` created only the five Task 3 tables and its version record in that test database; integration-test rows/leases are transaction-rolled-back.
+- **Risks / next action:** The local test-database credential was rotated and the updated connection/migration revision/lease test were verified; no value is retained in repository documentation. Review the Task 3 diff, commit it, then open the issue pull request.
 
 ### Previous handoff checkpoint
 
@@ -52,17 +52,18 @@ Append a checkpoint at issue start, after every independently testable task, aft
 # In Progress
 
 - BR-005 promotion precedence is on hold pending POS/merchandising decision.
+- Task 3 durable PostgreSQL workflow state is implemented and awaits review/commit on issue branch `codex/task-3-durable-workflow-state`.
 - Discovery of the unknown operational and business contracts listed below.
 
 # Next
 
-1. Obtain the Jenkins job definitions, schedules, command lines, service account, and job history.
-2. Obtain SQL Agent run history for `Refresh ESL Data`; its job definition and schedule have been captured.
+1. Retain/export complete Jenkins job definitions and broader history if available; the supplied screenshots/logs are manual evidence snapshots.
+2. Retain/export SQL Agent history with calendar dates and root-cause detail if it becomes available; the supplied history is a limited snapshot.
 3. Identify the legacy CSV consumer owner and validate the approved automated file/manifest/acknowledgement contract in non-production.
 4. Obtain SOLUM-supported API documentation and decide the retirement path for compatibility reads.
 5. Confirm promotion precedence, price category, and time/day eligibility.
 6. Measure workload, schedule, latency, failure, and recovery baselines.
-7. Establish the local Git repository and isolated implementation workspace, then execute the approved plan task by task with review gates.
+7. Review and commit Task 3, then continue the approved foundation plan task by task with review gates.
 
 # Decisions Made
 
@@ -78,7 +79,7 @@ Append a checkpoint at issue start, after every independently testable task, aft
 
 # Risks / Blockers
 
-- **High:** Jenkins definitions/schedules/runtime commands and historical run/failure data remain unavailable. SQL Agent job definition/schedule is now captured, but its run history is not.
+- **Medium:** Jenkins configuration screenshots and SQL Agent history are limited manual snapshots; complete Jenkins XML/retry settings and calendar-dated SQL Agent root-cause history remain unavailable.
 - **High:** Promotion selection is not deterministic for overlapping campaigns; time/day and priority semantics require business confirmation.
 - **High:** The target CSV contract is approved, but the legacy consumer owner has not accepted its schema, service identities/ACLs, timeout, retention, or rollback; production delivery therefore remains disabled.
 - **Medium:** Current AIMS reads rely on database structures that are not vendor-supported contracts.

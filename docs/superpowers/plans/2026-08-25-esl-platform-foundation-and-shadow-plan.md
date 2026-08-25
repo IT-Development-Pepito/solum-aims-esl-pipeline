@@ -200,7 +200,7 @@ git commit -m "feat: add settings and DPAPI secret boundary"
 - Produces `ExecutionRepository.create_execution()`, `claim_scope()`, `append_event()`, `record_action()`, and `list_events()`.
 - Produces `workflow_execution`, `scope_lease`, `execution_event`, `record_action`, and `workflow_schedule` tables.
 
-- [ ] **Step 1: Write the failing lease test**
+- [x] **Step 1: Write the failing lease test**
 
 ```python
 def test_only_one_execution_claims_store_scope(repository) -> None:
@@ -210,13 +210,13 @@ def test_only_one_execution_claims_store_scope(repository) -> None:
     assert repository.claim_scope(second.id, "sku-shadow:084") is False
 ```
 
-- [ ] **Step 2: Run it**
+- [x] **Step 2: Run it**
 
-Run: `TEST_DATABASE_URL=<approved-staging-postgresql-url> python -m pytest tests/integration/test_repository.py -v`
+Run: `ESL_TEST_DATABASE_URL=<approved-non-production-postgresql-url> python -m pytest tests/integration/test_repository.py -v`
 
 Expected: FAIL because the state schema is absent.
 
-- [ ] **Step 3: Implement tables, migration, and repository**
+- [x] **Step 3: Implement tables, migration, and repository**
 
 ```python
 def claim_scope(self, execution_id: UUID, scope_key: str) -> bool:
@@ -233,7 +233,7 @@ Add indexes for `scope_key`, `(execution_id, occurred_at)`, and `(workflow_name,
 
 - [ ] **Step 4: Verify and commit**
 
-Run: `alembic upgrade head; TEST_DATABASE_URL=<approved-staging-postgresql-url> python -m pytest tests/integration/test_repository.py -v`
+Run: `ESL_DATABASE_URL=<approved-non-production-postgresql-url> alembic upgrade head; ESL_TEST_DATABASE_URL=<approved-non-production-postgresql-url> python -m pytest tests/integration/test_repository.py -v`
 
 Expected: PASS.
 
