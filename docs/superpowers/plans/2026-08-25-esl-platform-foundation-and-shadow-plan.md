@@ -528,7 +528,7 @@ git commit -m "docs: add staging deployment and baseline collection"
 ## Deferred Follow-on Plans
 
 1. Promotion policy and activation after POS/merchandising approves BR-005 campaign precedence, time/day eligibility, and public/member rules.
-2. CSV consumer replacement after consumer, acknowledgement semantics, and retention are known.
+2. Automated CSV compatibility delivery under `docs/superpowers/plans/2026-08-25-automated-csv-compatibility-delivery-plan.md` after foundation Tasks 3, 6, and 7 and consumer acceptance are complete.
 3. Production cutover after staged shadow evidence meets approved parity, recovery, and performance gates.
 
 ## Self-Review

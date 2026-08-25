@@ -1,6 +1,6 @@
 # Current Phase
 
-Project preparation and requirements gathering continue in this chat. Implementation continues in a separate chat/session. The Python/React scaffold and production configuration/DPAPI secret boundary are implemented; workflow state, source adapters, scheduling, and shadow processing remain unimplemented.
+Project preparation and requirements gathering continue in this chat. Task 3 has an assigned issue and isolated worktree but remains blocked before database work because no dedicated non-production `ESL_TEST_DATABASE_URL` is available. The automated CSV compatibility contract is approved and its follow-on implementation plan is prepared but deferred until foundation Tasks 3, 6, and 7 and the consumer acceptance gate are complete.
 
 
 ## Cross-agent implementation checkpoints
@@ -19,6 +19,17 @@ Append a checkpoint at issue start, after every independently testable task, aft
 | Risks and next action | Open question/blocker, decision owner, and one smallest safe next action. |
 
 ### Latest handoff checkpoint
+
+- **Timestamp / owner:** 2026-08-25 17:26 +08:00; Codex Task 3 planning session.
+- **Issue:** GitHub #1, `Task 3: add durable PostgreSQL workflow state`, assigned to the authenticated account.
+- **Git state:** local branch `codex/task-3-durable-workflow-state` in `.worktrees/codex-task-3-durable-state`, HEAD `754e74ab26fbe46bb411ff4c423046cef24ed26f`; no PR, merge, or push. The approved CSV design is committed; its follow-on plan is uncommitted during this checkpoint.
+- **Scope:** The automated ACL-restricted CSV file/manifest/acknowledgement contract is approved. Its implementation is a separate follow-on plan and does not expand Task 3. No persistence, CSV adapter, scheduler, AIMS, or production behavior was implemented.
+- **Evidence:** The verified legacy SKU CSV has 42 ordered fields, UTF-8 encoding, comma delimiter, DOS line endings, and no header. Local Python 3.12.7 checks recorded 37 tests passing, Ruff passing, and mypy passing.
+- **Configuration:** Task 3 still requires `ESL_TEST_DATABASE_URL` through the approved secret boundary. Future CSV settings are names/contract only; no path, SID, credential, or secret value is stored in documentation.
+- **External state:** no PostgreSQL, SQL Server, AIMS, Jenkins, Hop, physical ESL, or filesystem-delivery action occurred.
+- **Risks / next action:** Task 3 remains blocked on the non-production PostgreSQL URL. The smallest safe next action is to commit the approved CSV follow-on plan, then resume Task 3 only after that URL is provisioned.
+
+### Previous handoff checkpoint
 
 - **Timestamp / owner:** 2026-08-25; Codex project-preparation session.
 - **Issue:** no implementation issue is active. Next planned issue is durable PostgreSQL workflow state (Task 3 of `docs/superpowers/plans/2026-08-25-esl-platform-foundation-and-shadow-plan.md`).
@@ -47,7 +58,7 @@ Append a checkpoint at issue start, after every independently testable task, aft
 
 1. Obtain the Jenkins job definitions, schedules, command lines, service account, and job history.
 2. Obtain SQL Agent run history for `Refresh ESL Data`; its job definition and schedule have been captured.
-3. Identify the consumer and contractual acknowledgement mechanism for `ESL_SKU_*.csv`.
+3. Identify the legacy CSV consumer owner and validate the approved automated file/manifest/acknowledgement contract in non-production.
 4. Obtain SOLUM-supported API documentation and decide the retirement path for compatibility reads.
 5. Confirm promotion precedence, price category, and time/day eligibility.
 6. Measure workload, schedule, latency, failure, and recovery baselines.
@@ -63,12 +74,13 @@ Append a checkpoint at issue start, after every independently testable task, aft
 - **AD-006:** Use Python + PostgreSQL as an internal web application with browser UI/API and CLI. It can run continuously as a dedicated Windows Service or directly by command line for development, diagnostics, and controlled administration. PostgreSQL is the target state/audit/queryable-log database.
 - **AD-007:** The available high-spec Windows 10 PC is accepted as the production host under explicit operational risk acceptance. Builds/releases use GitHub Actions to create approved immutable artifacts, which are currently transferred through a controlled method and installed locally. GitHub access may be enabled later after security review and outbound HTTPS allowlisting; secrets remain Windows DPAPI-protected, ACL-restricted per-environment bundles outside the repository.
 - **AD-008:** Use FastAPI for the internal backend/API and React + TypeScript + Vite + Tailwind CSS for the browser UI. Google Stitch exports are versioned design handoffs, not production application code; React uses authenticated FastAPI endpoints only.
+- **AD-012:** Use an automated ACL-restricted CSV/ready-manifest/acknowledgement handshake for bounded compatibility delivery. PostgreSQL remains authoritative for lifecycle/audit; filesystem presence is not completion, no blind resend is permitted, and the adapter stays disabled until consumer acceptance.
 
 # Risks / Blockers
 
 - **High:** Jenkins definitions/schedules/runtime commands and historical run/failure data remain unavailable. SQL Agent job definition/schedule is now captured, but its run history is not.
 - **High:** Promotion selection is not deterministic for overlapping campaigns; time/day and priority semantics require business confirmation.
-- **High:** The production contract for the SKU CSV output is unknown.
+- **High:** The target CSV contract is approved, but the legacy consumer owner has not accepted its schema, service identities/ACLs, timeout, retention, or rollback; production delivery therefore remains disabled.
 - **Medium:** Current AIMS reads rely on database structures that are not vendor-supported contracts.
 - **Medium:** Current AIMS page-change traffic is HTTP in the supplied artifact; support, authentication, and TLS capability must be verified.
 - **Medium:** No current workload, timing, availability, RPO/RTO, or recovery baseline was supplied.
@@ -85,6 +97,7 @@ Append a checkpoint at issue start, after every independently testable task, aft
 - **VERIFIED:** Hop uses SQL Server, AIMS Portal PostgreSQL, local files, and an AIMS Dashboard page-change HTTP endpoint. Credentials/configuration references exist in evidence but are intentionally not reproduced here.
 - **VERIFIED:** The live AIMS Dashboard OpenAPI documents `POST /common/labels/page` for page changes, but declares no API security scheme. It accepts a store query parameter and a `pageChangeList` of label/page pairs and returns response code/message plus batch ID.
 - **VERIFIED:** CSV samples provide evidence of Page 1/Page 2/Page 3/Page 4 operational outputs but do not identify a SKU CSV consumer or acknowledgement contract.
+- **VERIFIED:** The legacy SKU output definition contains 42 ordered fields, UTF-8 encoding, comma delimiter, DOS line endings, and no header. The approved target contract adds automatic atomic publication and matching acknowledgement without treating files as durable state.
 - **INFERRED:** The supplied artifacts are a snapshot/backup and are not a complete representation of production.
 
 # Verification Performed

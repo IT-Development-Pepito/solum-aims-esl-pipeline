@@ -49,7 +49,7 @@ Jenkins (job names/schedules UNKNOWN)
 | `esl-master-sku-updater.hpl` | Hop backup | SKU master entry pipeline. | `tb_ESL` stores → workflow. | Jenkins asserted by runbook. | VERIFIED / INFERRED trigger | Scheduling/orchestration. |
 | `esl-sku-update-daily-new.hwf` | Hop backup | SKU DB check, diff, export. | SQL/AIMS reads → CSV. | Abort on child/check failure. | VERIFIED | SKU workflow. |
 | `esl-compare-diff.hpl` | Hop backup | Compares source and AIMS article fields. | `tb_ESL`, AIMS `article` → changed item list. | No retry found. | VERIFIED | Diff/reconciliation rule. |
-| `esl-sku-update-to-csv.hpl` | Hop backup | Exports new/changed SKU CSV. | Diff list + SQL → file. | Consumer unknown. | VERIFIED | SKU delivery adapter. |
+| `esl-sku-update-to-csv.hpl` | Hop backup | Exports new/changed SKU CSV. | Diff list + SQL → file. | Legacy consumer identity unknown; target automated acknowledgement contract approved. | VERIFIED / NEEDS-CONSUMER-ACCEPTANCE | SKU delivery adapter. |
 | `esl-master-promo-runner.hpl` | Hop backup | Promotion entry; supplied SQL limits store `084`. | `tb_ESL` → workflow. | Jenkins asserted by runbook. | VERIFIED / INFERRED trigger | Scheduling/orchestration. |
 | `esl-promo-sub-workflow-delay.hwf` | Hop backup | Ordered page workflow. | Store parameter → three pipelines. | Abort hops after final two steps. | VERIFIED | Page workflow. |
 | OOS/normal reversion pipelines | Hop backup | Send recovered labels to Page 1. | SQL + AIMS mappings/pages → API, log CSV. | REST active. | VERIFIED | Display decision + AIMS write adapter. |
@@ -60,7 +60,7 @@ Jenkins (job names/schedules UNKNOWN)
 
 ### Known gaps
 
-Jenkins job configuration/schedules/command lines, runtime identity, production history, CSV consumer/acknowledgement contract, vendor support lifecycle/authentication policy, exact gateway topology, retention, and workload baseline are **UNKNOWN / NEEDS-DISCOVERY**.
+Jenkins job configuration/schedules/command lines, runtime identity, production history, legacy CSV consumer identity/acceptance, vendor support lifecycle/authentication policy, exact gateway topology, and workload baseline are **UNKNOWN / NEEDS-DISCOVERY**. The target automated CSV acknowledgement contract is approved; its environment-specific timeout and retention remain disabled pending consumer acceptance.
 
 ## 3. Business and data flow
 
@@ -176,3 +176,4 @@ Trust boundaries are SQL Server, AIMS API, optional read-only AIMS PostgreSQL, f
 | AD-009 | Use Windows DPAPI-protected per-environment secret bundles and GitHub Actions artifact promotion with controlled local deployment. | Chosen for the currently known Windows/GitHub and potentially Internet-isolated production environment; production does not need GitHub connectivity. |
 | AD-010 | Accept the high-spec Windows 10 PC as the production host under operational risk acceptance; deny public ingress and use least-privilege private network routes. | This removes the unavailable Windows Server dependency while recording the operational controls and future-platform improvement path. |
 | AD-011 | Use FastAPI for the internal backend/API and React + TypeScript + Vite + Tailwind CSS for the browser UI; use Google Stitch as a versioned design handoff. | The stack supports typed API contracts, controlled Windows deployment, and systematic conversion of Stitch exports into maintainable, tested components. |
+| AD-012 | Use an automated ACL-restricted CSV/ready-manifest/acknowledgement handshake for bounded compatibility delivery. | The legacy consumer is unknown, so PostgreSQL remains authoritative and file presence is never completion. The adapter is disabled until consumer acceptance and adds no HTTP surface. |

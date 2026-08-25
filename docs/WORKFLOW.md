@@ -144,7 +144,7 @@ Any non-zero `unresolved` count blocks automatic completion for affected scope u
 | AIMS compatibility query fails | Mark dependency degraded. | Do not substitute direct DB writes; use approved fallback or wait/escalate. |
 | Malformed input | Quarantine with reason. | Correct source/validation issue; replay only rejected records/window. |
 | Process/server restart | Inspect recovery report. | Resume/reconcile durable runs; do not launch duplicate manual runs. |
-| CSV delivery uncertainty | Treat as unresolved, not successful. | Verify consumer acknowledgement contract; replay only idempotently. CSV files are never the run's authoritative state or comparison evidence. |
+| CSV delivery uncertainty | Treat missing, rejected, malformed, mismatched, or timed-out acknowledgement as unresolved, not successful. | Inspect the durable delivery/event record and matching automatic acknowledgement; never infer completion from file presence or blindly resend. CSV files are never authoritative state or comparison evidence. |
 | Disk/telemetry failure | Protect audit durability, alert operations. | Restore capacity/telemetry then reconcile affected run. |
 
 ## Escalation

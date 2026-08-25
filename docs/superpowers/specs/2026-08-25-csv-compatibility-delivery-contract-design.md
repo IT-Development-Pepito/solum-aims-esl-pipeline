@@ -2,7 +2,7 @@
 
 ## Status
 
-**PROPOSED — approved direction pending document review.** This design defines the temporary automated compatibility delivery boundary for SKU CSV output. It does not authorize a production cutover or direct AIMS database access.
+**APPROVED — implementation planned.** This design defines the temporary automated compatibility delivery boundary for SKU CSV output. It does not authorize a production cutover or direct AIMS database access.
 
 ## Context and decision
 
