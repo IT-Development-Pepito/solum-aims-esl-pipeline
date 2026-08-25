@@ -1,7 +1,33 @@
 # Current Phase
 
-Foundation-and-shadow implementation is in progress under task-by-task review. The Python/React scaffold and production configuration/DPAPI secret boundary are implemented; source adapters, workflow state, scheduling, and shadow processing are not yet implemented.
+Project preparation and requirements gathering continue in this chat. Implementation continues in a separate chat/session. The Python/React scaffold and production configuration/DPAPI secret boundary are implemented; workflow state, source adapters, scheduling, and shadow processing remain unimplemented.
 
+
+## Cross-agent implementation checkpoints
+
+Append a checkpoint at issue start, after every independently testable task, after a review/fix round, when blocked, before changing agents/chats, and after merge. Never include credential values.
+
+| Field | Required content |
+| --- | --- |
+| Timestamp and owner | Local timestamp and agent/human identifier. |
+| Issue | GitHub issue number, title, labels, and assignee. |
+| Git state | Branch, worktree path, HEAD SHA, merge/PR state, and uncommitted-file status. |
+| Scope | Requirement/rule IDs, completed behavior, explicit non-goals, and files changed. |
+| Evidence | Exact test/lint/type/build commands, results, and environment version. |
+| Configuration | Variable names and secret-storage location only; never values, tokens, URLs containing passwords, or DPAPI blobs. |
+| External state | Read/write action taken against PostgreSQL, SQL Server, AIMS, filesystem delivery, or none. |
+| Risks and next action | Open question/blocker, decision owner, and one smallest safe next action. |
+
+### Latest handoff checkpoint
+
+- **Timestamp / owner:** 2026-08-25; Codex project-preparation session.
+- **Issue:** no implementation issue is active. Next planned issue is durable PostgreSQL workflow state (Task 3 of `docs/superpowers/plans/2026-08-25-esl-platform-foundation-and-shadow-plan.md`).
+- **Git state:** `main` tracking `origin/main`; preparation changes recorded in this checkpoint are pending commit. The prior pushed foundation head was `5abf9c6`; reviewed foundation commits are present locally and pushed.
+- **Scope completed:** Task 1 Python/React/Vite/Tailwind scaffold and CI; Task 2 settings and Windows DPAPI secret-boundary hardening. BR-005 remains on hold.
+- **Evidence:** Task 2 final review recorded 37 Python tests passing, Ruff passing, and mypy passing. CI targets Python 3.12 and Node 22; local verification also needs to be repeated under the selected Python 3.12 runtime.
+- **Configuration:** `.env.dev.example` and `.env.production.example` are credential-free references. A future Task 3 integration environment needs `ESL_TEST_DATABASE_URL`; no value has been supplied or stored.
+- **External state:** GitHub `main` was pushed after safely merging the remote initial README and licence. No production or integration database, AIMS, SQL Server, Hop, Jenkins, or ESL side effect occurred.
+- **Risks / next action:** Create and assign the Task 3 GitHub issue, create its branch/worktree, set a dedicated non-production `ESL_TEST_DATABASE_URL` outside source control, and implement only Task 3 under the approved plan.
 # Completed
 
 - Inspected all supplied current-system evidence under `docs/sql-server/` and `docs/hop-jenkins-pipeline/`.

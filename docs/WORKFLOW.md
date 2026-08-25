@@ -12,6 +12,45 @@ This is the operating model for the target internal web application. The applica
 - Use a bounded store/workflow scope; do not replay an unbounded historical range.
 - Escalate vendor-boundary issues through the approved SOLUM support path. Do not use direct AIMS database writes.
 
+## Daily development workflow
+
+This workflow applies to every GitHub issue and is usable by Codex, Claude, or a human developer. It governs repository work only; it does not authorize production database, AIMS, SQL Server, Hop, Jenkins, or ESL changes.
+
+### 1. Create and prepare the issue
+
+1. Use the title format **`[area] imperative outcome`**, for example: `[persistence] add durable scope lease`.
+2. State the problem, requirement/rule IDs, acceptance criteria, non-goals, operational risk, and test evidence required for closure.
+3. Add GitHub labels (the per-issue tags): exactly one type label (`type:feature`, `type:bug`, `type:chore`, `type:docs`, or `type:security`), one or more area labels (`area:domain`, `area:persistence`, `area:adapters`, `area:web`, `area:runtime`, `area:ci`, or `area:docs`), and a priority label (`priority:p0` through `priority:p3`). Add `blocked` only while a named dependency prevents progress.
+4. Assign the issue to the currently authenticated GitHub account. With GitHub CLI use `gh issue edit <number> --add-assignee "@me"`; confirm the assignee before work starts.
+5. Record the issue number and accepted scope in `docs/PROGRESS.md` before implementation.
+
+### 2. Use one branch and worktree per issue
+
+1. Start from current `main`: `git switch main`, then `git pull --ff-only origin main`.
+2. Create branch `issue/<number>-<kebab-case-outcome>`, for example `issue/42-durable-scope-lease`.
+3. Create a sibling worktree inside the ignored directory: `git worktree add .worktrees/issue-42-durable-scope-lease -b issue/42-durable-scope-lease main`.
+4. Work only from that issue worktree. Never mix two issues in one worktree or branch.
+5. GitHub labels are the required per-issue tags. Create an annotated Git tag only for an approved release or tested milestone, using `v<major>.<minor>.<patch>` or `test-<YYYYMMDD>-issue-<number>`; do not create a Git tag for an unreviewed issue branch.
+
+### 3. Implement, test, and checkpoint
+
+1. Read `AGENTS.md`, `docs/PROGRESS.md`, and the issue before changing files.
+2. Write or update the focused failing test first for production behavior. Run it and capture the expected failure before implementing the minimum change.
+3. Run focused tests after each behavior change, then the relevant lint, type, build, and integration checks before committing.
+4. Use meaningful Conventional Commit-style messages: `feat(persistence): add scope lease (#42)`, `fix(config): reject broad service SID (#42)`, `docs(workflow): add issue handoff rules (#42)`.
+5. Update the issue and `docs/PROGRESS.md` checkpoint after each independently testable task, review result, blocker, migration, configuration contract, or external side effect.
+
+### 4. Open and review the pull request
+
+1. Push the issue branch and open a PR using `.github/pull_request_template.md`.
+2. Use title format `<type>(<area>): <outcome> (#<issue>)`.
+3. Apply the same type, area, and priority labels as the issue; assign the PR to the current authenticated account and request the appropriate review.
+4. A PR must link the issue, name requirement/rule IDs, include commands and results, state migration/configuration/side-effect impact, and identify rollback/recovery where relevant.
+5. Merge only after review and required checks pass. Delete the issue worktree only after the branch is merged and the `PROGRESS.md` checkpoint records the merge commit and next step.
+
+### Cross-agent handoff rule
+
+Before changing chats or agents, add a checkpoint to `docs/PROGRESS.md` containing: issue number/title, branch, commit SHA, exact completed scope, commands and results, uncommitted state, configuration variable names without values, external systems touched, unresolved risks, and the next smallest action. A new agent must read the latest checkpoint before work.
 ## Operational concepts
 
 | Term | Meaning |
