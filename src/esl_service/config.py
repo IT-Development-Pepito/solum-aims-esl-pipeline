@@ -1,7 +1,6 @@
 """Runtime configuration and Windows secret-bundle trust boundary."""
 
 import ctypes
-import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -50,6 +49,85 @@ class WindowsProgramDataDirectoryProvider:
 
 
 @dataclass(frozen=True)
+class ResolvedWindowsIdentity:
+    """Canonical Windows SID and its resolved account classification."""
+
+    sid: str
+    account_name: str
+    domain: str
+    account_type: int
+
+
+class ServiceIdentityResolver(Protocol):
+    """Parses a SID and resolves its Windows account classification."""
+
+    def resolve(self, sid: str) -> ResolvedWindowsIdentity: ...
+
+
+class WindowsServiceIdentityResolver:
+    """Uses Windows SID parsing and account lookup without trusting SID text."""
+
+    def resolve(self, sid: str) -> ResolvedWindowsIdentity:
+        try:
+            import win32security  # type: ignore[import-untyped]
+
+            parsed_sid = win32security.ConvertStringSidToSid(sid)
+            if not parsed_sid.IsValid():
+                raise ValueError
+            canonical_sid = win32security.ConvertSidToStringSid(parsed_sid).upper()
+            account_name, domain, account_type = win32security.LookupAccountSid(
+                None, parsed_sid
+            )
+            if not account_name.strip() or not domain.strip():
+                raise ValueError
+            return ResolvedWindowsIdentity(
+                sid=canonical_sid,
+                account_name=account_name,
+                domain=domain,
+                account_type=account_type,
+            )
+        except Exception:  # noqa: BLE001
+            raise ValueError("service_identity_sid could not be verified") from None
+
+
+class ServiceIdentityValidator(Protocol):
+    """Accepts only a resolved service account or per-service SID."""
+
+    def validate(self, sid: str) -> str: ...
+
+
+class WindowsServiceIdentityValidator:
+    """Rejects broad and group principals even when their SID is resolvable."""
+
+    _SID_TYPE_USER = 1
+    _SID_TYPE_WELL_KNOWN_GROUP = 5
+    _SERVICE_SID_PREFIX = "S-1-5-80-"
+    _SERVICE_SID_DOMAIN = "NT SERVICE"
+
+    def __init__(self, resolver: ServiceIdentityResolver | None = None) -> None:
+        self._resolver = resolver or WindowsServiceIdentityResolver()
+
+    def validate(self, sid: str) -> str:
+        identity = self._resolver.resolve(sid)
+        canonical_sid = identity.sid.upper()
+        if sid.strip().upper() != canonical_sid:
+            raise ValueError(
+                "service_identity_sid must identify a real service account or service SID"
+            )
+        if identity.account_type == self._SID_TYPE_USER:
+            return canonical_sid
+        if (
+            identity.account_type == self._SID_TYPE_WELL_KNOWN_GROUP
+            and canonical_sid.startswith(self._SERVICE_SID_PREFIX)
+            and identity.domain.upper() == self._SERVICE_SID_DOMAIN
+        ):
+            return canonical_sid
+        raise ValueError(
+            "service_identity_sid must identify a real service account or service SID"
+        )
+
+
+@dataclass(frozen=True)
 class AclEntry:
     """One allow ACE reduced to its principal SID and access mask."""
 
@@ -77,7 +155,10 @@ class SecretBundleAclReader(Protocol):
 class WindowsSecretBundleAclReader:
     """Windows-only DACL reader used only after production path validation."""
 
-    _ALLOW_CAPABLE_ACE_TYPES = frozenset({0, 5, 9, 11})
+    _ALLOW_CAPABLE_ACE_TYPES = frozenset({0, 4, 5, 9, 11})
+    _KNOWN_NON_ALLOW_ACE_TYPES = frozenset(
+        {1, 2, 3, 6, 7, 8, 10, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21}
+    )
 
     def read_file(self, path: Path) -> AclInspection:
         if not path.is_file():
@@ -91,7 +172,7 @@ class WindowsSecretBundleAclReader:
 
     def _read_acl(self, path: Path) -> AclInspection:
         try:
-            import win32security  # type: ignore[import-untyped]
+            import win32security
 
             descriptor = win32security.GetFileSecurity(
                 str(path),
@@ -116,7 +197,10 @@ class WindowsSecretBundleAclReader:
                             access_mask=access_mask,
                         )
                     )
-                elif header[0] in self._ALLOW_CAPABLE_ACE_TYPES:
+                elif (
+                    header[0] in self._ALLOW_CAPABLE_ACE_TYPES
+                    or header[0] not in self._KNOWN_NON_ALLOW_ACE_TYPES
+                ):
                     entries.append(AclEntry(None, 0, ace_type=header[0]))
             return AclInspection(owner_sid, tuple(entries))
         except ValueError:
@@ -137,17 +221,6 @@ class WindowsSecretBundlePathValidator:
     _ADMINISTRATORS_SID = "S-1-5-32-544"
     # SYSTEM is allowed because the Windows Service may run as LocalSystem.
     _LOCAL_SYSTEM_SID = "S-1-5-18"
-    _SID_PATTERN = re.compile(r"^S-\d+(?:-\d+)+$", re.IGNORECASE)
-    _FORBIDDEN_SERVICE_SIDS = frozenset(
-        {
-            "S-1-1-0",  # Everyone
-            "S-1-5-11",  # Authenticated Users
-            _ADMINISTRATORS_SID,
-            "S-1-5-32-545",  # BUILTIN\Users
-            "S-1-5-32-546",  # BUILTIN\Guests
-            _LOCAL_SYSTEM_SID,
-        }
-    )
     _DIRECTORY_REPLACEMENT_MASK = (
         0x00000002  # FILE_ADD_FILE / FILE_WRITE_DATA
         | 0x00000004  # FILE_ADD_SUBDIRECTORY / FILE_APPEND_DATA
@@ -216,6 +289,9 @@ class Settings(BaseSettings):
     secret_bundle_path_validator_factory: ClassVar[
         Callable[[], SecretBundlePathValidator]
     ] = WindowsSecretBundlePathValidator
+    service_identity_validator_factory: ClassVar[
+        Callable[[], ServiceIdentityValidator]
+    ] = WindowsServiceIdentityValidator
 
     @model_validator(mode="after")
     def validate_production_security(self) -> "Settings":
@@ -225,16 +301,11 @@ class Settings(BaseSettings):
             return self
         if not self.service_identity_sid.strip():
             raise ValueError("service_identity_sid must be configured for production")
-        normalized_service_sid = self.service_identity_sid.upper()
-        if (
-            not WindowsSecretBundlePathValidator._SID_PATTERN.fullmatch(
-                normalized_service_sid
-            )
-            or normalized_service_sid
-            in WindowsSecretBundlePathValidator._FORBIDDEN_SERVICE_SIDS
-            or normalized_service_sid.startswith("S-1-5-32-")
-        ):
-            raise ValueError("service_identity_sid must be a non-broad service SID")
+        normalized_service_sid = (
+            type(self)
+            .service_identity_validator_factory()
+            .validate(self.service_identity_sid)
+        )
 
         canonical_bundle_path = self.secret_bundle_path.resolve(strict=False)
         program_data_directory = type(self).program_data_directory_provider_factory().get_path()

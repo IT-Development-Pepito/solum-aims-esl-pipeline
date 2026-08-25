@@ -1,4 +1,6 @@
+import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from pydantic import ValidationError
@@ -6,11 +8,48 @@ from pydantic import ValidationError
 from esl_service.config import (
     AclEntry,
     AclInspection,
+    ResolvedWindowsIdentity,
     Settings,
+    WindowsSecretBundleAclReader,
     WindowsSecretBundlePathValidator,
+    WindowsServiceIdentityResolver,
+    WindowsServiceIdentityValidator,
 )
 
 _SERVICE_SID = "S-1-5-21-111-222-333-4444"
+_WINDOWS_SID_TYPE_USER = 1
+_WINDOWS_SID_TYPE_GROUP = 2
+_WINDOWS_SID_TYPE_WELL_KNOWN_GROUP = 5
+
+
+class _StaticServiceIdentityResolver:
+    def __init__(self, identities: dict[str, ResolvedWindowsIdentity]) -> None:
+        self._identities = identities
+
+    def resolve(self, sid: str) -> ResolvedWindowsIdentity:
+        try:
+            return self._identities[sid.upper()]
+        except KeyError:
+            raise ValueError("service_identity_sid could not be verified") from None
+
+
+@pytest.fixture(autouse=True)
+def _inject_test_service_identity_resolver(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    identity = ResolvedWindowsIdentity(
+        sid=_SERVICE_SID,
+        account_name="test-esl-service",
+        domain="TEST",
+        account_type=_WINDOWS_SID_TYPE_USER,
+    )
+    monkeypatch.setattr(
+        Settings,
+        "service_identity_validator_factory",
+        lambda: WindowsServiceIdentityValidator(
+            _StaticServiceIdentityResolver({_SERVICE_SID: identity})
+        ),
+    )
 
 
 def test_production_requires_internal_host() -> None:
@@ -227,6 +266,156 @@ def test_production_acl_rejects_unsupported_allow_ace_type() -> None:
         validator.validate(
             Path(r"C:\ProgramData\SOLUM\ESL\secrets.dpapi"), _SERVICE_SID
         )
+
+
+@pytest.mark.parametrize("ace_type", [4, 255])
+def test_windows_acl_reader_fails_closed_for_uninterpreted_ace_types(
+    ace_type: int,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    class _StaticDacl:
+        def GetAceCount(self) -> int:
+            return 1
+
+        def GetAce(self, _index: int) -> tuple[tuple[int, int], int]:
+            return ((ace_type, 0), 1)
+
+    class _StaticDescriptor:
+        def GetSecurityDescriptorDacl(self) -> _StaticDacl:
+            return _StaticDacl()
+
+        def GetSecurityDescriptorOwner(self) -> str:
+            return _SERVICE_SID
+
+    monkeypatch.setitem(
+        sys.modules,
+        "win32security",
+        SimpleNamespace(
+            DACL_SECURITY_INFORMATION=4,
+            OWNER_SECURITY_INFORMATION=1,
+            GetFileSecurity=lambda *_: _StaticDescriptor(),
+            ConvertSidToStringSid=lambda sid: sid,
+        ),
+    )
+    bundle_path = tmp_path / "secrets.dpapi"
+    bundle_path.write_bytes(b"test-bundle")
+    validator = WindowsSecretBundlePathValidator(WindowsSecretBundleAclReader())
+
+    with pytest.raises(ValueError, match="unsupported allow ACE type"):
+        validator.validate(bundle_path, _SERVICE_SID)
+
+
+def test_windows_identity_resolver_parses_and_looks_up_sid(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _ParsedSid:
+        def IsValid(self) -> bool:
+            return True
+
+    parsed_sid = _ParsedSid()
+    monkeypatch.setitem(
+        sys.modules,
+        "win32security",
+        SimpleNamespace(
+            ConvertStringSidToSid=lambda _sid: parsed_sid,
+            ConvertSidToStringSid=lambda _sid: _SERVICE_SID,
+            LookupAccountSid=lambda _system, _sid: (
+                "test-esl-service",
+                "TEST",
+                _WINDOWS_SID_TYPE_USER,
+            ),
+        ),
+    )
+
+    identity = WindowsServiceIdentityResolver().resolve(_SERVICE_SID.lower())
+
+    assert identity == ResolvedWindowsIdentity(
+        sid=_SERVICE_SID,
+        account_name="test-esl-service",
+        domain="TEST",
+        account_type=_WINDOWS_SID_TYPE_USER,
+    )
+
+
+@pytest.mark.parametrize(
+    ("identity", "reason"),
+    [
+        (
+            ResolvedWindowsIdentity(
+                "S-1-5-4",
+                "INTERACTIVE",
+                "NT AUTHORITY",
+                _WINDOWS_SID_TYPE_WELL_KNOWN_GROUP,
+            ),
+            "interactive well-known principal",
+        ),
+        (
+            ResolvedWindowsIdentity(
+                "S-1-5-6",
+                "SERVICE",
+                "NT AUTHORITY",
+                _WINDOWS_SID_TYPE_WELL_KNOWN_GROUP,
+            ),
+            "service well-known principal",
+        ),
+        (
+            ResolvedWindowsIdentity(
+                "S-1-5-21-111-222-333-513",
+                "Domain Users",
+                "TEST",
+                _WINDOWS_SID_TYPE_GROUP,
+            ),
+            "ordinary account group",
+        ),
+        (
+            ResolvedWindowsIdentity(
+                "S-1-5-80-111-222-333-444-555",
+                "spoofed-service",
+                "NT AUTHORITY",
+                _WINDOWS_SID_TYPE_WELL_KNOWN_GROUP,
+            ),
+            "service SID outside NT SERVICE namespace",
+        ),
+    ],
+)
+def test_service_identity_validator_rejects_broad_or_group_principals(
+    identity: ResolvedWindowsIdentity,
+    reason: str,
+) -> None:
+    validator = WindowsServiceIdentityValidator(
+        _StaticServiceIdentityResolver({identity.sid: identity})
+    )
+
+    with pytest.raises(ValueError, match="real service account or service SID"):
+        validator.validate(identity.sid)
+
+
+@pytest.mark.parametrize(
+    "identity",
+    [
+        ResolvedWindowsIdentity(
+            _SERVICE_SID,
+            "test-esl-service",
+            "TEST",
+            _WINDOWS_SID_TYPE_USER,
+        ),
+        ResolvedWindowsIdentity(
+            "S-1-5-80-111-222-333-444-555",
+            "test-esl-service",
+            "NT SERVICE",
+            _WINDOWS_SID_TYPE_WELL_KNOWN_GROUP,
+        ),
+    ],
+)
+def test_service_identity_validator_accepts_real_service_identity(
+    identity: ResolvedWindowsIdentity,
+) -> None:
+    validator = WindowsServiceIdentityValidator(
+        _StaticServiceIdentityResolver({identity.sid: identity})
+    )
+
+    assert validator.validate(identity.sid.lower()) == identity.sid
 
 
 @pytest.mark.parametrize("service_sid", ["not-a-sid", "S-1-1-0", "S-1-5-32-544"])
