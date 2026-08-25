@@ -1,6 +1,6 @@
 # Current Phase
 
-Architecture and specification completed; the foundation-and-shadow implementation plan is approved for subagent-driven execution. No replacement application has been implemented.
+Foundation-and-shadow implementation is in progress under task-by-task review. The Python/React scaffold and production configuration/DPAPI secret boundary are implemented; source adapters, workflow state, scheduling, and shadow processing are not yet implemented.
 
 # Completed
 
@@ -9,6 +9,8 @@ Architecture and specification completed; the foundation-and-shadow implementati
 - Documented a temporary read-only AIMS PostgreSQL compatibility adapter for the first cutover; vendor-supported APIs remain the preferred long-term boundary.
 - Created the initial source-of-truth specification, architecture, and operations documents.
 - Created the approved foundation-and-shadow implementation plan at `docs/superpowers/plans/2026-08-25-esl-platform-foundation-and-shadow-plan.md`.
+- Implemented and independently reviewed Task 1: Python/React/Tailwind project scaffold and CI.
+- Implemented and independently reviewed Task 2: validated settings and the production DPAPI secret boundary, including Windows Service identity, known-folder, owner, and ACL safeguards.
 
 # In Progress
 
