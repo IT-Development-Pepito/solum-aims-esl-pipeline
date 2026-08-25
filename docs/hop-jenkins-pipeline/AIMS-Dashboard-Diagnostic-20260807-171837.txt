@@ -1,0 +1,164 @@
+﻿[2026-08-07 17:18:37] [INFO] SOLUM AIMS Dashboard Service read-only diagnostic started.
+[2026-08-07 17:18:37] [INFO] AIMS endpoint: http://192.168.85.213:9001/dashboardservice
+[2026-08-07 17:18:37] [INFO] Store: 084
+[2026-08-07 17:18:37] [INFO] Report: D:\Downloads\AIMS-Dashboard-Diagnostic-20260807-171837.txt
+[2026-08-07 17:18:37] [INFO] Safety mode: HTTP GET requests only; no database commands or modifying API methods.
+[2026-08-07 17:18:37] [INFO] 
+[2026-08-07 17:18:37] [INFO] ==============================================================================
+[2026-08-07 17:18:37] [DATA] STEP 1 - TCP reachability to AIMS Dashboard Service
+[2026-08-07 17:18:37] [INFO] ==============================================================================
+[2026-08-07 17:18:38] [DATA] RemoteAddress: 192.168.85.213
+[2026-08-07 17:18:38] [DATA] RemotePort: 9001
+[2026-08-07 17:18:38] [PASS] TcpTestSucceeded: True
+[2026-08-07 17:18:38] [INFO] 
+[2026-08-07 17:18:38] [INFO] ==============================================================================
+[2026-08-07 17:18:38] [DATA] STEP 2 - Download and identify AIMS OpenAPI specification
+[2026-08-07 17:18:38] [INFO] ==============================================================================
+[2026-08-07 17:18:39] [DATA] OpenAPI URL: http://192.168.85.213:9001/dashboardservice/doc/json/common
+[2026-08-07 17:18:39] [PASS] OpenAPI version: 3.1.0
+[2026-08-07 17:18:39] [DATA] API title: Dashboard Service
+[2026-08-07 17:18:39] [DATA] AIMS version/build: 4.9.0.RELEASE(8c40f3d)
+[2026-08-07 17:18:39] [INFO] 
+[2026-08-07 17:18:39] [INFO] ==============================================================================
+[2026-08-07 17:18:39] [DATA] STEP 3 - OpenAPI server definitions
+[2026-08-07 17:18:39] [INFO] ==============================================================================
+[2026-08-07 17:18:39] [DATA] Server URL: http://localhost:9001/dashboardservice | Description: Default URL
+[2026-08-07 17:18:39] [DATA] Server URL: /dashboardservice | Description: 
+[2026-08-07 17:18:39] [PASS] Relative /dashboardservice server definition is present; remote clients are not inherently limited to localhost by this OpenAPI document.
+[2026-08-07 17:18:40] [INFO] 
+[2026-08-07 17:18:40] [INFO] ==============================================================================
+[2026-08-07 17:18:40] [DATA] STEP 4 - Inspect target Article endpoint
+[2026-08-07 17:18:40] [INFO] ==============================================================================
+[2026-08-07 17:18:40] [DATA] Path: /common/articles/content
+[2026-08-07 17:18:40] [PASS] HTTP method: GET
+[2026-08-07 17:18:40] [DATA] Summary: Get article information by the specific field value
+[2026-08-07 17:18:40] [DATA] operationId: getArticles_1
+[2026-08-07 17:18:40] [DATA] Tags: Article
+[2026-08-07 17:18:40] [INFO] 
+[2026-08-07 17:18:40] [INFO] ==============================================================================
+[2026-08-07 17:18:40] [DATA] STEP 5 - Target query parameters
+[2026-08-07 17:18:40] [INFO] ==============================================================================
+[2026-08-07 17:18:40] [DATA] Name=company; in=query; required=False; type=string
+[2026-08-07 17:18:40] [DATA] Name=export; in=query; required=False; type=boolean
+[2026-08-07 17:18:40] [DATA] Name=store; in=query; required=True; type=string
+[2026-08-07 17:18:40] [DATA] Name=id; in=query; required=False; type=string
+[2026-08-07 17:18:40] [DATA] Name=name; in=query; required=False; type=string
+[2026-08-07 17:18:40] [DATA] Name=data; in=query; required=False; type=boolean
+[2026-08-07 17:18:40] [DATA] Name=key; in=query; required=True; type=string
+[2026-08-07 17:18:40] [DATA] Name=value; in=query; required=True; type=string
+[2026-08-07 17:18:40] [DATA] Name=pageable; in=query; required=True; type=object
+[2026-08-07 17:18:40] [INFO] 
+[2026-08-07 17:18:40] [INFO] ==============================================================================
+[2026-08-07 17:18:40] [DATA] STEP 6 - Pageable schema and derived pagination query
+[2026-08-07 17:18:40] [INFO] ==============================================================================
+[2026-08-07 17:18:40] [DATA] {
+    "type":  "object",
+    "properties":  {
+                       "page":  {
+                                    "type":  "integer",
+                                    "format":  "int32",
+                                    "minimum":  0
+                                },
+                       "size":  {
+                                    "type":  "integer",
+                                    "format":  "int32",
+                                    "minimum":  1
+                                },
+                       "sort":  {
+                                    "type":  "array",
+                                    "items":  {
+                                                  "type":  "string"
+                                              }
+                                }
+                   }
+}
+[2026-08-07 17:18:40] [DATA] Derived pagination query: page=0&size=10
+[2026-08-07 17:18:40] [INFO] 
+[2026-08-07 17:18:40] [INFO] ==============================================================================
+[2026-08-07 17:18:40] [DATA] STEP 7 - Security, request body, and documented responses
+[2026-08-07 17:18:40] [INFO] ==============================================================================
+[2026-08-07 17:18:40] [DATA] Operation security: <null>
+[2026-08-07 17:18:40] [DATA] Global security: <null>
+[2026-08-07 17:18:40] [DATA] securitySchemes: <null>
+[2026-08-07 17:18:40] [DATA] Request body: <null>
+[2026-08-07 17:18:40] [DATA] responses: {
+    "200":  {
+                "description":  "OK",
+                "content":  {
+                                "application/json;charset=UTF-8":  {
+                                                                       "schema":  {
+                                                                                      "$ref":  "#/components/schemas/ArticleParam"
+                                                                                  }
+                                                                   }
+                            }
+            },
+    "204":  {
+                "description":  "Operation Succeeded. But There is no content.",
+                "content":  {
+
+                            }
+            },
+    "500":  {
+                "description":  "Fail to retrieve requested information.",
+                "content":  {
+
+                            }
+            }
+}
+[2026-08-07 17:18:40] [INFO] 
+[2026-08-07 17:18:40] [INFO] ==============================================================================
+[2026-08-07 17:18:40] [DATA] STEP 8 - Automatic read-only Article discovery
+[2026-08-07 17:18:40] [INFO] ==============================================================================
+[2026-08-07 17:18:40] [DATA] Article-tagged GET discovery candidates: 10
+[2026-08-07 17:18:40] [DATA] Candidate score=70; path=/common/articles; operationId=getArticles; summary=Get Article List
+[2026-08-07 17:18:40] [DATA] Candidate score=70; path=/common/category/articles; operationId=getArticlesContent; summary=Get article information by the specific field value
+[2026-08-07 17:18:40] [DATA] Candidate score=50; path=/common/articles/data; operationId=getArticleDataList; summary=Get Article Data List
+[2026-08-07 17:18:40] [DATA] Candidate score=50; path=/common/articles/history; operationId=getArticleFileHistoryList; summary=Get Article File History List
+[2026-08-07 17:18:40] [DATA] Candidate score=50; path=/common/articles/map/reserved; operationId=getMappedReservedList; summary=Get Article Mapped List
+[2026-08-07 17:18:40] [DATA] Candidate score=50; path=/common/articles/schedule; operationId=getScheduledArticlesFileList; summary=Get Article File Schedule List
+[2026-08-07 17:18:40] [DATA] Candidate score=40; path=/common/articles/schedule/file; operationId=getScheduleFile; summary=Get Article File Schedule
+[2026-08-07 17:18:40] [DATA] Candidate score=40; path=/common/articles/sub; operationId=getArticleWithSub; summary=Get Articles with Sub
+[2026-08-07 17:18:40] [DATA] Candidate score=40; path=/common/config/articleField; operationId=getArticleByArticleId; summary=Get Article By Article ID
+[2026-08-07 17:18:40] [DATA] Candidate score=20; path=/common/articles/upload/file; operationId=getUploadedFile; summary=Get Uploaded file
+[2026-08-07 17:18:40] [DATA] Discovery GET #1: http://192.168.85.213:9001/dashboardservice/common/articles?data=false&export=false&page=0&size=10&sort=name%2CASC&store=084
+[2026-08-07 17:18:40] [DATA] Discovery HTTP status: 200; elapsed=99ms
+[2026-08-07 17:18:40] [DATA] Discovery JSON shape: System.Management.Automation.PSCustomObject; top-level properties=totalArticleCnt, articleList, responseCode, responseMessage
+[2026-08-07 17:18:40] [PASS] Article candidate discovered from /common/articles.
+[2026-08-07 17:18:40] [DATA] Candidate object properties: articleId, articleName, generateDate, lastUpdated, assignedLabel
+[2026-08-07 17:18:40] [DATA] Candidate field: articleId; value preview: 1010******76
+[2026-08-07 17:18:40] [DATA] Candidate field: articleId; value preview: 1010******76
+[2026-08-07 17:18:40] [INFO] 
+[2026-08-07 17:18:40] [INFO] ==============================================================================
+[2026-08-07 17:18:40] [DATA] STEP 9 - Automatic target GET /common/articles/content
+[2026-08-07 17:18:40] [INFO] ==============================================================================
+[2026-08-07 17:18:40] [DATA] Target GET using key=articleId; value preview=1010******76
+[2026-08-07 17:18:40] [DATA] HTTP status: 204; elapsed=36ms
+[2026-08-07 17:18:40] [PASS] PASS: remote HTTP API request completed successfully.
+[2026-08-07 17:18:40] [DATA] Response headers: {
+    "Vary":  "Origin,Access-Control-Request-Method,Access-Control-Request-Headers",
+    "X-total-count":  "0",
+    "X-Content-Type-Options":  "nosniff",
+    "X-XSS-Protection":  "0",
+    "Pragma":  "no-cache",
+    "Cache-Control":  "no-cache, no-store, max-age=0, must-revalidate",
+    "Date":  "Fri, 07 Aug 2026 09:18:42 GMT",
+    "Expires":  "0",
+    "Set-Cookie":  "\u003credacted\u003e"
+}
+[2026-08-07 17:18:40] [DATA] Response body preview: <empty>
+[2026-08-07 17:18:40] [INFO] 
+[2026-08-07 17:18:40] [INFO] ==============================================================================
+[2026-08-07 17:18:40] [DATA] STEP 10 - Final diagnostic summary
+[2026-08-07 17:18:40] [INFO] ==============================================================================
+[2026-08-07 17:18:40] [PASS] TCP 9001 reachable: True
+[2026-08-07 17:18:40] [PASS] OpenAPI loaded: True
+[2026-08-07 17:18:40] [DATA] OpenAPI version: 3.1.0
+[2026-08-07 17:18:40] [DATA] AIMS version/build: 4.9.0.RELEASE(8c40f3d)
+[2026-08-07 17:18:40] [PASS] Target route GET /common/articles/content exists: True
+[2026-08-07 17:18:40] [DATA] Selected discovery endpoint: /common/articles
+[2026-08-07 17:18:40] [DATA] Discovered key: articleId
+[2026-08-07 17:18:40] [DATA] Discovered value preview: 1010******76
+[2026-08-07 17:18:40] [PASS] Target HTTP status: 204
+[2026-08-07 17:18:40] [PASS] CONCLUSION: remote, non-browser access to this AIMS Article API operation succeeded.
+[2026-08-07 17:18:40] [PASS] No modifying HTTP methods were executed.
+[2026-08-07 17:18:40] [DATA] FINAL REPORT: D:\Downloads\AIMS-Dashboard-Diagnostic-20260807-171837.txt

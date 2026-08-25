@@ -1,0 +1,926 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<pipeline>
+  <info>
+    <name>esl-sku-revert-to-normal-price</name>
+    <name_sync_with_filename>Y</name_sync_with_filename>
+    <description/>
+    <extended_description/>
+    <pipeline_version/>
+    <pipeline_type>Normal</pipeline_type>
+    <pipeline_status>0</pipeline_status>
+    <parameters>
+      <parameter>
+        <name>STORE_CODE_PARAM</name>
+        <default_value/>
+        <description/>
+      </parameter>
+    </parameters>
+    <capture_transform_performance>N</capture_transform_performance>
+    <transform_performance_capturing_delay>1000</transform_performance_capturing_delay>
+    <transform_performance_capturing_size_limit>100</transform_performance_capturing_size_limit>
+    <created_user>-</created_user>
+    <created_date>2026/06/12 17:02:53.040</created_date>
+    <modified_user>-</modified_user>
+    <modified_date>2026/06/12 17:02:53.040</modified_date>
+  </info>
+  <notepads>
+  </notepads>
+  <order>
+    <hop>
+      <from>Table input SKU Product Non Promo</from>
+      <to>Get Link Product - ESL ID</to>
+      <enabled>Y</enabled>
+    </hop>
+    <hop>
+      <from>Table input Link ESL ID - Product</from>
+      <to>Get Link Product - ESL ID</to>
+      <enabled>Y</enabled>
+    </hop>
+    <hop>
+      <from>Sort rows by label_code 2</from>
+      <to>Merge join</to>
+      <enabled>Y</enabled>
+    </hop>
+    <hop>
+      <from>Get Link Product - ESL ID</from>
+      <to>Sort rows by label_code 2</to>
+      <enabled>Y</enabled>
+    </hop>
+    <hop>
+      <from>Table input Current Page Label</from>
+      <to>JSON input</to>
+      <enabled>Y</enabled>
+    </hop>
+    <hop>
+      <from>Enhanced JSON Output</from>
+      <to>REST client PAGE 1</to>
+      <enabled>Y</enabled>
+    </hop>
+    <hop>
+      <from>Merge join</from>
+      <to>Add constants</to>
+      <enabled>Y</enabled>
+    </hop>
+    <hop>
+      <from>Add constants</from>
+      <to>Filter rows currentPage != existingPage &amp;&amp; SOH != 0</to>
+      <enabled>Y</enabled>
+    </hop>
+    <hop>
+      <from>Add constants (REVERT price)</from>
+      <to>Select values</to>
+      <enabled>Y</enabled>
+    </hop>
+    <hop>
+      <from>Filter rows currentPage != existingPage &amp;&amp; SOH != 0</from>
+      <to>Dummy (do nothing)</to>
+      <enabled>Y</enabled>
+    </hop>
+    <hop>
+      <from>Dummy (do nothing)</from>
+      <to>Enhanced JSON Output</to>
+      <enabled>Y</enabled>
+    </hop>
+    <hop>
+      <from>Dummy (do nothing)</from>
+      <to>Add constants (REVERT price)</to>
+      <enabled>Y</enabled>
+    </hop>
+    <hop>
+      <from>Dummy (do nothing)</from>
+      <to>Text output PG1</to>
+      <enabled>Y</enabled>
+    </hop>
+    <hop>
+      <from>JSON input</from>
+      <to>Sort rows by label_code</to>
+      <enabled>Y</enabled>
+    </hop>
+    <hop>
+      <from>Sort rows by label_code</from>
+      <to>Merge join</to>
+      <enabled>Y</enabled>
+    </hop>
+    <hop>
+      <from>Select values</from>
+      <to>Write to log PG1</to>
+      <enabled>Y</enabled>
+    </hop>
+    <hop>
+      <from>Write to log PG1</from>
+      <to>Copy rows to result</to>
+      <enabled>Y</enabled>
+    </hop>
+  </order>
+  <transform>
+    <name>Add constants</name>
+    <type>Constant</type>
+    <description/>
+    <distribute>N</distribute>
+    <custom_distribution/>
+    <copies>1</copies>
+    <partitioning>
+      <method>none</method>
+      <schema_name/>
+    </partitioning>
+    <fields>
+      <field>
+        <format>#</format>
+        <length>-1</length>
+        <name>destinationPage</name>
+        <nullif>1</nullif>
+        <precision>-1</precision>
+        <set_empty_string>N</set_empty_string>
+        <type>Integer</type>
+      </field>
+      <field>
+        <length>-1</length>
+        <name>batchId</name>
+        <nullif>1</nullif>
+        <precision>-1</precision>
+        <set_empty_string>N</set_empty_string>
+        <type>String</type>
+      </field>
+    </fields>
+    <attributes/>
+    <GUI>
+      <xloc>896</xloc>
+      <yloc>160</yloc>
+    </GUI>
+  </transform>
+  <transform>
+    <name>Add constants (REVERT price)</name>
+    <type>Constant</type>
+    <description/>
+    <distribute>Y</distribute>
+    <custom_distribution/>
+    <copies>1</copies>
+    <partitioning>
+      <method>none</method>
+      <schema_name/>
+    </partitioning>
+    <fields>
+      <field>
+        <length>-1</length>
+        <name>EXPECTED_ACTION</name>
+        <nullif>REVERT-PROMO</nullif>
+        <precision>-1</precision>
+        <set_empty_string>N</set_empty_string>
+        <type>String</type>
+      </field>
+    </fields>
+    <attributes/>
+    <GUI>
+      <xloc>1008</xloc>
+      <yloc>368</yloc>
+    </GUI>
+  </transform>
+  <transform>
+    <name>Copy rows to result</name>
+    <type>RowsToResult</type>
+    <description/>
+    <distribute>Y</distribute>
+    <custom_distribution/>
+    <copies>1</copies>
+    <partitioning>
+      <method>none</method>
+      <schema_name/>
+    </partitioning>
+    <attributes/>
+    <GUI>
+      <xloc>848</xloc>
+      <yloc>560</yloc>
+    </GUI>
+  </transform>
+  <transform>
+    <name>Dummy (do nothing)</name>
+    <type>Dummy</type>
+    <description/>
+    <distribute>N</distribute>
+    <custom_distribution/>
+    <copies>1</copies>
+    <partitioning>
+      <method>none</method>
+      <schema_name/>
+    </partitioning>
+    <attributes/>
+    <GUI>
+      <xloc>1152</xloc>
+      <yloc>288</yloc>
+    </GUI>
+  </transform>
+  <transform>
+    <name>Enhanced JSON Output</name>
+    <type>EnhancedJsonOutput</type>
+    <description/>
+    <distribute>Y</distribute>
+    <custom_distribution/>
+    <copies>1</copies>
+    <partitioning>
+      <method>none</method>
+      <schema_name/>
+    </partitioning>
+    <outputValue>final_payload_page1</outputValue>
+    <jsonBloc>pageChangeList</jsonBloc>
+    <operation_type>outputvalue</operation_type>
+    <use_arrays_with_single_instance>Y</use_arrays_with_single_instance>
+    <use_single_item_per_group>N</use_single_item_per_group>
+    <json_prittified>N</json_prittified>
+    <encoding>UTF-8</encoding>
+    <addtoresult>N</addtoresult>
+    <file>
+      <name/>
+      <split_output_after>0</split_output_after>
+      <extention/>
+      <append>N</append>
+      <split>N</split>
+      <haspartno>N</haspartno>
+      <add_date>N</add_date>
+      <add_time>N</add_time>
+      <create_parent_folder>N</create_parent_folder>
+      <doNotOpenNewFileInit>N</doNotOpenNewFileInit>
+    </file>
+    <additional_fields>
+      <json_size_field/>
+    </additional_fields>
+    <key_fields>
+      <key_field>
+        <key_field_name>batchId</key_field_name>
+        <key_field_element/>
+      </key_field>
+    </key_fields>
+    <fields>
+      <field>
+        <name>destinationPage</name>
+        <element>page</element>
+        <json_fragment>N</json_fragment>
+        <is_without_enclosing>N</is_without_enclosing>
+        <remove_if_blank>N</remove_if_blank>
+      </field>
+      <field>
+        <name>label_code</name>
+        <element>labelCode</element>
+        <json_fragment>N</json_fragment>
+        <is_without_enclosing>N</is_without_enclosing>
+        <remove_if_blank>N</remove_if_blank>
+      </field>
+    </fields>
+    <attributes/>
+    <GUI>
+      <xloc>1296</xloc>
+      <yloc>368</yloc>
+    </GUI>
+  </transform>
+  <transform>
+    <name>Filter rows currentPage != existingPage &amp;&amp; SOH != 0</name>
+    <type>FilterRows</type>
+    <description/>
+    <distribute>Y</distribute>
+    <custom_distribution/>
+    <copies>1</copies>
+    <partitioning>
+      <method>none</method>
+      <schema_name/>
+    </partitioning>
+    <compare>
+      <condition>
+        <conditions>
+          <condition>
+            <conditions>
+</conditions>
+            <function>&lt;></function>
+            <leftvalue>currentPage</leftvalue>
+            <negated>N</negated>
+            <operator>-</operator>
+            <rightvalue>destinationPage</rightvalue>
+          </condition>
+          <condition>
+            <conditions>
+</conditions>
+            <function>&gt;</function>
+            <leftvalue>SOH</leftvalue>
+            <negated>N</negated>
+            <operator>AND</operator>
+            <value>
+              <isnull>N</isnull>
+              <length>-1</length>
+              <mask>####0;-####0</mask>
+              <name>constant</name>
+              <precision>0</precision>
+              <text>0</text>
+              <type>Integer</type>
+            </value>
+          </condition>
+        </conditions>
+        <function>&lt;></function>
+        <leftvalue>currentPage</leftvalue>
+        <negated>N</negated>
+        <operator>-</operator>
+        <rightvalue>destinationPage</rightvalue>
+      </condition>
+    </compare>
+    <send_true_to>Dummy (do nothing)</send_true_to>
+    <attributes/>
+    <GUI>
+      <xloc>1152</xloc>
+      <yloc>160</yloc>
+    </GUI>
+  </transform>
+  <transform>
+    <name>Get Link Product - ESL ID</name>
+    <type>MergeJoin</type>
+    <description/>
+    <distribute>Y</distribute>
+    <custom_distribution/>
+    <copies>1</copies>
+    <partitioning>
+      <method>none</method>
+      <schema_name/>
+    </partitioning>
+    <join_type>INNER</join_type>
+    <keys_1>
+      <key>article_id</key>
+    </keys_1>
+    <keys_2>
+      <key>ITEM_CODE</key>
+    </keys_2>
+    <transform1>Table input Link ESL ID - Product</transform1>
+    <transform2>Table input SKU Product Non Promo</transform2>
+    <attributes/>
+    <GUI>
+      <xloc>288</xloc>
+      <yloc>384</yloc>
+    </GUI>
+  </transform>
+  <transform>
+    <name>JSON input</name>
+    <type>JsonInput</type>
+    <description/>
+    <distribute>Y</distribute>
+    <custom_distribution/>
+    <copies>1</copies>
+    <partitioning>
+      <method>none</method>
+      <schema_name/>
+    </partitioning>
+    <include>N</include>
+    <include_field/>
+    <rownum>N</rownum>
+    <addresultfile>N</addresultfile>
+    <readurl>N</readurl>
+    <removeSourceField>N</removeSourceField>
+    <IsIgnoreEmptyFile>N</IsIgnoreEmptyFile>
+    <doNotFailIfNoFile>Y</doNotFailIfNoFile>
+    <ignoreMissingPath>Y</ignoreMissingPath>
+    <defaultPathLeafToNull>Y</defaultPathLeafToNull>
+    <rownum_field/>
+    <file>
+      <name/>
+      <filemask/>
+      <exclude_filemask/>
+      <file_required>N</file_required>
+      <include_subfolders>N</include_subfolders>
+    </file>
+    <fields>
+      <field>
+        <name>currentPage</name>
+        <path>$.currentPage</path>
+        <type>String</type>
+        <format/>
+        <currency/>
+        <decimal/>
+        <group/>
+        <length>-1</length>
+        <precision>-1</precision>
+        <trim_type>none</trim_type>
+        <repeat>N</repeat>
+      </field>
+      <field>
+        <name>exceptionPage</name>
+        <path>$.exceptionPage</path>
+        <type>String</type>
+        <format/>
+        <currency/>
+        <decimal/>
+        <group/>
+        <length>-1</length>
+        <precision>-1</precision>
+        <trim_type>none</trim_type>
+        <repeat>N</repeat>
+      </field>
+      <field>
+        <name>returnPage</name>
+        <path>$.returnPage</path>
+        <type>String</type>
+        <format/>
+        <currency/>
+        <decimal/>
+        <group/>
+        <length>-1</length>
+        <precision>-1</precision>
+        <trim_type>none</trim_type>
+        <repeat>N</repeat>
+      </field>
+    </fields>
+    <limit>0</limit>
+    <IsInFields>Y</IsInFields>
+    <IsAFile>N</IsAFile>
+    <valueField>pages</valueField>
+    <shortFileFieldName/>
+    <pathFieldName/>
+    <hiddenFieldName/>
+    <lastModificationTimeFieldName/>
+    <uriNameFieldName/>
+    <rootUriNameFieldName/>
+    <extensionFieldName/>
+    <sizeFieldName/>
+    <attributes/>
+    <GUI>
+      <xloc>304</xloc>
+      <yloc>96</yloc>
+    </GUI>
+  </transform>
+  <transform>
+    <name>Merge join</name>
+    <type>MergeJoin</type>
+    <description/>
+    <distribute>Y</distribute>
+    <custom_distribution/>
+    <copies>1</copies>
+    <partitioning>
+      <method>none</method>
+      <schema_name/>
+    </partitioning>
+    <join_type>INNER</join_type>
+    <keys_1>
+      <key>label_code</key>
+    </keys_1>
+    <keys_2>
+      <key>label_code</key>
+    </keys_2>
+    <transform1>Sort rows by label_code</transform1>
+    <transform2>Sort rows by label_code 2</transform2>
+    <attributes/>
+    <GUI>
+      <xloc>656</xloc>
+      <yloc>160</yloc>
+    </GUI>
+  </transform>
+  <transform>
+    <name>REST client PAGE 1</name>
+    <type>Rest</type>
+    <description/>
+    <distribute>Y</distribute>
+    <custom_distribution/>
+    <copies>1</copies>
+    <partitioning>
+      <method>none</method>
+      <schema_name/>
+    </partitioning>
+    <applicationType>JSON</applicationType>
+    <bodyField>final_payload_page1</bodyField>
+    <connectionTimeout>10000</connectionTimeout>
+    <dynamicMethod>N</dynamicMethod>
+    <headers>
+</headers>
+    <httpPassword>Encrypted </httpPassword>
+    <ignoreSsl>N</ignoreSsl>
+    <matrixParameters>
+</matrixParameters>
+    <method>POST</method>
+    <parameters>
+</parameters>
+    <preemptive>N</preemptive>
+    <readTimeout>10000</readTimeout>
+    <result>
+      <code>HTTP Code</code>
+      <name>Result</name>
+      <response_time>Response Time</response_time>
+    </result>
+    <trustStorePassword>Encrypted </trustStorePassword>
+    <url>http://192.168.85.213:9001/dashboardservice/common/labels/page?store='${STORE_CODE_PARAM}'</url>
+    <urlInField>N</urlInField>
+    <attributes/>
+    <GUI>
+      <xloc>1296</xloc>
+      <yloc>464</yloc>
+    </GUI>
+  </transform>
+  <transform>
+    <name>Select values</name>
+    <type>SelectValues</type>
+    <description/>
+    <distribute>Y</distribute>
+    <custom_distribution/>
+    <copies>1</copies>
+    <partitioning>
+      <method>none</method>
+      <schema_name/>
+    </partitioning>
+    <fields>
+      <field>
+        <length>-2</length>
+        <name>station_code</name>
+        <precision>-2</precision>
+        <rename>STORE_CODE</rename>
+      </field>
+      <field>
+        <length>-2</length>
+        <name>ITEM_CODE</name>
+        <precision>-2</precision>
+      </field>
+      <field>
+        <length>-2</length>
+        <name>ITEM_NAME</name>
+        <precision>-2</precision>
+      </field>
+      <field>
+        <length>-2</length>
+        <name>label_code</name>
+        <precision>-2</precision>
+        <rename>ESL_ID</rename>
+      </field>
+      <field>
+        <length>-2</length>
+        <name>EXPECTED_ACTION</name>
+        <precision>-2</precision>
+      </field>
+      <meta>
+        <date_format_lenient>N</date_format_lenient>
+        <length>-2</length>
+        <lenient_string_to_number>N</lenient_string_to_number>
+        <name>STORE_CODE</name>
+        <precision>-2</precision>
+        <rename>STORE_CODE</rename>
+        <roundingType>half_even</roundingType>
+        <storage_type/>
+        <type>String</type>
+      </meta>
+      <meta>
+        <date_format_lenient>N</date_format_lenient>
+        <length>-2</length>
+        <lenient_string_to_number>N</lenient_string_to_number>
+        <name>ITEM_CODE</name>
+        <precision>-2</precision>
+        <rename>ITEM_CODE</rename>
+        <roundingType>half_even</roundingType>
+        <storage_type/>
+        <type>String</type>
+      </meta>
+      <meta>
+        <date_format_lenient>N</date_format_lenient>
+        <length>-2</length>
+        <lenient_string_to_number>N</lenient_string_to_number>
+        <name>ITEM_NAME</name>
+        <precision>-2</precision>
+        <rename>ITEM_NAME</rename>
+        <roundingType>half_even</roundingType>
+        <storage_type/>
+        <type>String</type>
+      </meta>
+      <meta>
+        <date_format_lenient>N</date_format_lenient>
+        <length>-2</length>
+        <lenient_string_to_number>N</lenient_string_to_number>
+        <name>ESL_ID</name>
+        <precision>-2</precision>
+        <rename>ESL_ID</rename>
+        <roundingType>half_even</roundingType>
+        <storage_type/>
+        <type>String</type>
+      </meta>
+      <meta>
+        <date_format_lenient>N</date_format_lenient>
+        <length>-2</length>
+        <lenient_string_to_number>N</lenient_string_to_number>
+        <name>EXPECTED_ACTION</name>
+        <precision>-2</precision>
+        <rename>EXPECTED_ACTION</rename>
+        <roundingType>half_even</roundingType>
+        <storage_type/>
+        <type>String</type>
+      </meta>
+      <select_unspecified>N</select_unspecified>
+    </fields>
+    <attributes/>
+    <GUI>
+      <xloc>848</xloc>
+      <yloc>368</yloc>
+    </GUI>
+  </transform>
+  <transform>
+    <name>Sort rows by label_code</name>
+    <type>SortRows</type>
+    <description/>
+    <distribute>Y</distribute>
+    <custom_distribution/>
+    <copies>1</copies>
+    <partitioning>
+      <method>none</method>
+      <schema_name/>
+    </partitioning>
+    <compress>N</compress>
+    <directory>${java.io.tmpdir}</directory>
+    <fields>
+      <field>
+        <ascending>Y</ascending>
+        <case_sensitive>N</case_sensitive>
+        <collator_enabled>N</collator_enabled>
+        <collator_strength>0</collator_strength>
+        <name>label_code</name>
+        <presorted>N</presorted>
+      </field>
+    </fields>
+    <sort_prefix>out</sort_prefix>
+    <sort_size>1000000</sort_size>
+    <unique_rows>N</unique_rows>
+    <attributes/>
+    <GUI>
+      <xloc>448</xloc>
+      <yloc>96</yloc>
+    </GUI>
+  </transform>
+  <transform>
+    <name>Sort rows by label_code 2</name>
+    <type>SortRows</type>
+    <description/>
+    <distribute>N</distribute>
+    <custom_distribution/>
+    <copies>1</copies>
+    <partitioning>
+      <method>none</method>
+      <schema_name/>
+    </partitioning>
+    <compress>N</compress>
+    <directory>${java.io.tmpdir}</directory>
+    <fields>
+      <field>
+        <ascending>Y</ascending>
+        <case_sensitive>N</case_sensitive>
+        <collator_enabled>N</collator_enabled>
+        <collator_strength>0</collator_strength>
+        <name>label_code</name>
+        <presorted>N</presorted>
+      </field>
+    </fields>
+    <sort_prefix>out</sort_prefix>
+    <sort_size>1000000</sort_size>
+    <unique_rows>N</unique_rows>
+    <attributes/>
+    <GUI>
+      <xloc>480</xloc>
+      <yloc>272</yloc>
+    </GUI>
+  </transform>
+  <transform>
+    <name>Table input Current Page Label</name>
+    <type>TableInput</type>
+    <description/>
+    <distribute>Y</distribute>
+    <custom_distribution/>
+    <copies>1</copies>
+    <partitioning>
+      <method>none</method>
+      <schema_name/>
+    </partitioning>
+    <connection>DB AIMS PORTAL (ESL ID - Product ID)</connection>
+    <execute_each_row>N</execute_each_row>
+    <limit>0</limit>
+    <sql>SELECT station_code, label_code, pages FROM enddevice a
+JOIN
+end_device_articles b ON a.code = b.label_code 
+WHERE station_code = '${STORE_CODE_PARAM}' AND
+a.state = 'SUCCESS'
+ORDER BY article_id ASC
+
+</sql>
+    <variables_active>Y</variables_active>
+    <attributes/>
+    <GUI>
+      <xloc>128</xloc>
+      <yloc>96</yloc>
+    </GUI>
+  </transform>
+  <transform>
+    <name>Table input Link ESL ID - Product</name>
+    <type>TableInput</type>
+    <description/>
+    <distribute>Y</distribute>
+    <custom_distribution/>
+    <copies>1</copies>
+    <partitioning>
+      <method>none</method>
+      <schema_name/>
+    </partitioning>
+    <connection>DB AIMS PORTAL (ESL ID - Product ID)</connection>
+    <execute_each_row>N</execute_each_row>
+    <limit>0</limit>
+    <sql>SELECT * FROM end_device_articles 
+WHERE station_code = '${STORE_CODE_PARAM}' 
+ORDER BY article_id ASC</sql>
+    <variables_active>Y</variables_active>
+    <attributes/>
+    <GUI>
+      <xloc>128</xloc>
+      <yloc>480</yloc>
+    </GUI>
+  </transform>
+  <transform>
+    <name>Table input SKU Product Non Promo</name>
+    <type>TableInput</type>
+    <description/>
+    <distribute>Y</distribute>
+    <custom_distribution/>
+    <copies>1</copies>
+    <partitioning>
+      <method>none</method>
+      <schema_name/>
+    </partitioning>
+    <connection>DB ESL Product</connection>
+    <execute_each_row>N</execute_each_row>
+    <limit>0</limit>
+    <sql>SELECT * FROM dbo.tb_esl 
+WHERE 
+store_code = '${STORE_CODE_PARAM}' AND promo_flag = 0
+ORDER BY item_code ASC
+
+--need to calculate wheter each SKU is in promo range</sql>
+    <variables_active>Y</variables_active>
+    <attributes/>
+    <GUI>
+      <xloc>112</xloc>
+      <yloc>288</yloc>
+    </GUI>
+  </transform>
+  <transform>
+    <name>Text output PG1</name>
+    <type>TextFileOutput</type>
+    <description/>
+    <distribute>Y</distribute>
+    <custom_distribution/>
+    <copies>1</copies>
+    <partitioning>
+      <method>none</method>
+      <schema_name/>
+    </partitioning>
+    <schema_definition/>
+    <ignore_fields>N</ignore_fields>
+    <separator>,</separator>
+    <enclosure>"</enclosure>
+    <enclosure_forced>N</enclosure_forced>
+    <enclosure_fix_disabled>N</enclosure_fix_disabled>
+    <header>Y</header>
+    <footer>N</footer>
+    <format>DOS</format>
+    <compression>None</compression>
+    <encoding>UTF-8</encoding>
+    <endedLine/>
+    <fileNameInField>N</fileNameInField>
+    <fileNameField/>
+    <create_parent_folder>Y</create_parent_folder>
+    <file>
+      <name>D:\ESL Daily Log CSV\REVERT-PROMO_${STORE_CODE_PARAM}_PG1</name>
+      <servlet_output>N</servlet_output>
+      <do_not_open_new_file_init>Y</do_not_open_new_file_init>
+      <extention>csv</extention>
+      <append>N</append>
+      <split>N</split>
+      <haspartno>N</haspartno>
+      <add_date>Y</add_date>
+      <add_time>Y</add_time>
+      <SpecifyFormat>N</SpecifyFormat>
+      <date_time_format/>
+      <add_to_result_filenames>Y</add_to_result_filenames>
+      <pad>N</pad>
+      <fast_dump>N</fast_dump>
+      <splitevery/>
+    </file>
+    <fields>
+      <field>
+        <name>STORE_CODE</name>
+        <type>String</type>
+        <format/>
+        <currency/>
+        <decimal/>
+        <group/>
+        <nullif/>
+        <trim_type>none</trim_type>
+        <roundingType>half_even</roundingType>
+        <length>10</length>
+        <precision>-1</precision>
+      </field>
+      <field>
+        <name>ITEM_CODE</name>
+        <type>String</type>
+        <format/>
+        <currency/>
+        <decimal/>
+        <group/>
+        <nullif/>
+        <trim_type>none</trim_type>
+        <roundingType>half_even</roundingType>
+        <length>30</length>
+        <precision>-1</precision>
+      </field>
+      <field>
+        <name>BARCODE</name>
+        <type>String</type>
+        <format/>
+        <currency/>
+        <decimal/>
+        <group/>
+        <nullif/>
+        <trim_type>none</trim_type>
+        <roundingType>half_even</roundingType>
+        <length>50</length>
+        <precision>-1</precision>
+      </field>
+      <field>
+        <name>ITEM_NAME</name>
+        <type>String</type>
+        <format/>
+        <currency/>
+        <decimal/>
+        <group/>
+        <nullif/>
+        <trim_type>none</trim_type>
+        <roundingType>half_even</roundingType>
+        <length>500</length>
+        <precision>-1</precision>
+      </field>
+      <field>
+        <name>SALES_PRICE</name>
+        <type>Integer</type>
+        <format>####0;-####0</format>
+        <currency>$</currency>
+        <decimal>.</decimal>
+        <group>,</group>
+        <nullif/>
+        <trim_type>none</trim_type>
+        <roundingType>half_even</roundingType>
+        <length>9</length>
+        <precision>0</precision>
+      </field>
+      <field>
+        <name>PROMO_FLAG</name>
+        <type>String</type>
+        <format/>
+        <currency/>
+        <decimal/>
+        <group/>
+        <nullif/>
+        <trim_type>none</trim_type>
+        <roundingType>half_even</roundingType>
+        <length>10</length>
+        <precision>-1</precision>
+      </field>
+    </fields>
+    <attributes/>
+    <GUI>
+      <xloc>1152</xloc>
+      <yloc>464</yloc>
+    </GUI>
+  </transform>
+  <transform>
+    <name>Write to log PG1</name>
+    <type>WriteToLog</type>
+    <description/>
+    <distribute>Y</distribute>
+    <custom_distribution/>
+    <copies>1</copies>
+    <partitioning>
+      <method>none</method>
+      <schema_name/>
+    </partitioning>
+    <displayHeader>Y</displayHeader>
+    <fields>
+      <field>
+        <name>STORE_CODE</name>
+      </field>
+      <field>
+        <name>ITEM_CODE</name>
+      </field>
+      <field>
+        <name>ITEM_NAME</name>
+      </field>
+      <field>
+        <name>ESL_ID</name>
+      </field>
+      <field>
+        <name>EXPECTED_ACTION</name>
+      </field>
+    </fields>
+    <limitRows>N</limitRows>
+    <limitRowsNumber>0</limitRowsNumber>
+    <loglevel>Basic</loglevel>
+    <logmessage>REVERTED FROM PROMO ITEM</logmessage>
+    <attributes/>
+    <GUI>
+      <xloc>848</xloc>
+      <yloc>464</yloc>
+    </GUI>
+  </transform>
+  <transform_error_handling>
+  </transform_error_handling>
+  <attributes/>
+</pipeline>
