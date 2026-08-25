@@ -147,10 +147,14 @@ git commit -m "chore: scaffold ESL service"
 - [ ] **Step 1: Write the failing test**
 
 ```python
+import pytest
+from pydantic import ValidationError
+
 from esl_service.config import Settings
 
 def test_production_requires_internal_host() -> None:
-    Settings.model_validate({"environment": "production", "database_url": "postgresql://state", "internal_host": ""})
+    with pytest.raises(ValidationError, match="internal_host"):
+        Settings.model_validate({"environment": "production", "database_url": "postgresql://state", "internal_host": ""})
 ```
 
 - [ ] **Step 2: Run it**
