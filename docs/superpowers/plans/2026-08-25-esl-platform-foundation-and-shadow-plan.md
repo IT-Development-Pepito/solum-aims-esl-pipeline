@@ -75,11 +75,18 @@ def test_package_imports() -> None:
     assert esl_service.__name__ == "esl_service"
 ```
 
+```tsx
+it("shows the ESL operations application title", () => {
+  render(<App />)
+  expect(screen.getByRole("heading", { name: "ESL Operations" })).toBeInTheDocument()
+})
+```
+
 - [ ] **Step 2: Run it**
 
-Run: `python -m pytest tests/unit/test_project_import.py -v`
+Run: `python -m pytest tests/unit/test_project_import.py -v` and, in `frontend/`, `npm run test -- --run src/app.test.tsx`
 
-Expected: FAIL because the package does not exist.
+Expected: the Python test fails because the package does not exist; the frontend test fails because the Vite/React test configuration and application shell do not exist.
 
 - [ ] **Step 3: Add project configuration and CI**
 
