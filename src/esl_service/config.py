@@ -1,6 +1,7 @@
 """Runtime configuration and Windows secret-bundle trust boundary."""
 
 import ctypes
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -52,52 +53,72 @@ class WindowsProgramDataDirectoryProvider:
 class AclEntry:
     """One allow ACE reduced to its principal SID and access mask."""
 
-    sid: str
+    sid: str | None
     access_mask: int
+    ace_type: int = 0
+
+
+@dataclass(frozen=True)
+class AclInspection:
+    """Owner SID and all DACL ACEs that require policy evaluation."""
+
+    owner_sid: str
+    entries: tuple[AclEntry, ...]
 
 
 class SecretBundleAclReader(Protocol):
     """Reads the existence and allow ACEs used by the bundle policy."""
 
-    def is_file(self, path: Path) -> bool: ...
+    def read_file(self, path: Path) -> AclInspection: ...
 
-    def is_directory(self, path: Path) -> bool: ...
-
-    def allow_entries(self, path: Path) -> tuple[AclEntry, ...]: ...
+    def read_directory(self, path: Path) -> AclInspection: ...
 
 
 class WindowsSecretBundleAclReader:
     """Windows-only DACL reader used only after production path validation."""
 
-    _ALLOW_ACE_TYPES = frozenset({0, 5})
+    _ALLOW_CAPABLE_ACE_TYPES = frozenset({0, 5, 9, 11})
 
-    def is_file(self, path: Path) -> bool:
-        return path.is_file()
+    def read_file(self, path: Path) -> AclInspection:
+        if not path.is_file():
+            raise ValueError("secret_bundle_path must reference an existing bundle")
+        return self._read_acl(path)
 
-    def is_directory(self, path: Path) -> bool:
-        return path.is_dir()
+    def read_directory(self, path: Path) -> AclInspection:
+        if not path.is_dir():
+            raise ValueError("secret_bundle_path parent directory is missing")
+        return self._read_acl(path)
 
-    def allow_entries(self, path: Path) -> tuple[AclEntry, ...]:
+    def _read_acl(self, path: Path) -> AclInspection:
         try:
             import win32security  # type: ignore[import-untyped]
 
             descriptor = win32security.GetFileSecurity(
-                str(path), win32security.DACL_SECURITY_INFORMATION
+                str(path),
+                win32security.DACL_SECURITY_INFORMATION
+                | win32security.OWNER_SECURITY_INFORMATION,
             )
             dacl = descriptor.GetSecurityDescriptorDacl()
             if dacl is None:
                 raise ValueError("secret_bundle_path ACL is missing")
+            owner_sid = win32security.ConvertSidToStringSid(
+                descriptor.GetSecurityDescriptorOwner()
+            )
             entries: list[AclEntry] = []
             for index in range(dacl.GetAceCount()):
-                header, access_mask, sid = dacl.GetAce(index)
-                if header[0] in self._ALLOW_ACE_TYPES:
+                ace = dacl.GetAce(index)
+                header = ace[0]
+                if header[0] == 0:
+                    _, access_mask, sid = ace
                     entries.append(
                         AclEntry(
                             sid=win32security.ConvertSidToStringSid(sid),
                             access_mask=access_mask,
                         )
                     )
-            return tuple(entries)
+                elif header[0] in self._ALLOW_CAPABLE_ACE_TYPES:
+                    entries.append(AclEntry(None, 0, ace_type=header[0]))
+            return AclInspection(owner_sid, tuple(entries))
         except ValueError:
             raise
         except Exception:  # noqa: BLE001
@@ -116,6 +137,17 @@ class WindowsSecretBundlePathValidator:
     _ADMINISTRATORS_SID = "S-1-5-32-544"
     # SYSTEM is allowed because the Windows Service may run as LocalSystem.
     _LOCAL_SYSTEM_SID = "S-1-5-18"
+    _SID_PATTERN = re.compile(r"^S-\d+(?:-\d+)+$", re.IGNORECASE)
+    _FORBIDDEN_SERVICE_SIDS = frozenset(
+        {
+            "S-1-1-0",  # Everyone
+            "S-1-5-11",  # Authenticated Users
+            _ADMINISTRATORS_SID,
+            "S-1-5-32-545",  # BUILTIN\Users
+            "S-1-5-32-546",  # BUILTIN\Guests
+            _LOCAL_SYSTEM_SID,
+        }
+    )
     _DIRECTORY_REPLACEMENT_MASK = (
         0x00000002  # FILE_ADD_FILE / FILE_WRITE_DATA
         | 0x00000004  # FILE_ADD_SUBDIRECTORY / FILE_APPEND_DATA
@@ -133,10 +165,8 @@ class WindowsSecretBundlePathValidator:
         self._reader = reader or WindowsSecretBundleAclReader()
 
     def validate(self, path: Path, service_identity_sid: str) -> None:
-        if not self._reader.is_file(path):
-            raise ValueError("secret_bundle_path must reference an existing bundle")
-        if not self._reader.is_directory(path.parent):
-            raise ValueError("secret_bundle_path parent directory is missing")
+        file_acl = self._reader.read_file(path)
+        directory_acl = self._reader.read_directory(path.parent)
 
         approved_sids = frozenset(
             {
@@ -145,10 +175,16 @@ class WindowsSecretBundlePathValidator:
                 self._LOCAL_SYSTEM_SID,
             }
         )
-        for entry in self._reader.allow_entries(path):
+        if file_acl.owner_sid not in approved_sids:
+            raise ValueError("secret_bundle_path file owner is not approved")
+        if directory_acl.owner_sid not in approved_sids:
+            raise ValueError("secret_bundle_path directory owner is not approved")
+        for entry in file_acl.entries:
+            self._validate_supported_ace(entry)
             if entry.sid not in approved_sids:
                 raise ValueError("secret_bundle_path ACL permits non-approved principal")
-        for entry in self._reader.allow_entries(path.parent):
+        for entry in directory_acl.entries:
+            self._validate_supported_ace(entry)
             if (
                 entry.sid not in approved_sids
                 and entry.access_mask & self._DIRECTORY_REPLACEMENT_MASK
@@ -156,6 +192,11 @@ class WindowsSecretBundlePathValidator:
                 raise ValueError(
                     "secret_bundle_path directory ACL permits non-approved principal"
                 )
+
+    @staticmethod
+    def _validate_supported_ace(entry: AclEntry) -> None:
+        if entry.ace_type != 0:
+            raise ValueError("secret_bundle_path ACL contains unsupported allow ACE type")
 
 
 class Settings(BaseSettings):
@@ -184,6 +225,16 @@ class Settings(BaseSettings):
             return self
         if not self.service_identity_sid.strip():
             raise ValueError("service_identity_sid must be configured for production")
+        normalized_service_sid = self.service_identity_sid.upper()
+        if (
+            not WindowsSecretBundlePathValidator._SID_PATTERN.fullmatch(
+                normalized_service_sid
+            )
+            or normalized_service_sid
+            in WindowsSecretBundlePathValidator._FORBIDDEN_SERVICE_SIDS
+            or normalized_service_sid.startswith("S-1-5-32-")
+        ):
+            raise ValueError("service_identity_sid must be a non-broad service SID")
 
         canonical_bundle_path = self.secret_bundle_path.resolve(strict=False)
         program_data_directory = type(self).program_data_directory_provider_factory().get_path()
@@ -199,5 +250,5 @@ class Settings(BaseSettings):
             )
 
         validator = type(self).secret_bundle_path_validator_factory()
-        validator.validate(canonical_bundle_path, self.service_identity_sid)
+        validator.validate(canonical_bundle_path, normalized_service_sid)
         return self
