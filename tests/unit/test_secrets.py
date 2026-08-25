@@ -64,3 +64,40 @@ def test_dpapi_provider_does_not_expose_decryption_details_in_errors(
         DpapiSecretProvider(settings).get("database_password")
 
     assert "test-secret-value" not in str(error.value)
+
+
+def test_dpapi_provider_redacts_file_read_failure(tmp_path: Path) -> None:
+    settings = Settings.model_validate(
+        {
+            "environment": "development",
+            "database_url": "postgresql://state",
+            "internal_host": "localhost",
+            "secret_bundle_path": tmp_path / "missing-secrets.dpapi",
+        }
+    )
+
+    with pytest.raises(SecretUnavailableError, match="secret bundle is unavailable"):
+        DpapiSecretProvider(settings).get("database_password")
+
+
+def test_dpapi_provider_redacts_malformed_decrypted_bundle(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    bundle_path = tmp_path / "secrets.dpapi"
+    bundle_path.write_bytes(b"test-encrypted-bundle")
+    monkeypatch.setitem(
+        sys.modules,
+        "win32crypt",
+        SimpleNamespace(CryptUnprotectData=lambda *_: ("test bundle", b"not-json")),
+    )
+    settings = Settings.model_validate(
+        {
+            "environment": "development",
+            "database_url": "postgresql://state",
+            "internal_host": "localhost",
+            "secret_bundle_path": bundle_path,
+        }
+    )
+
+    with pytest.raises(SecretUnavailableError, match="secret bundle is unavailable"):
+        DpapiSecretProvider(settings).get("database_password")
