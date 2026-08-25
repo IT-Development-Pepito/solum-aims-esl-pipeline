@@ -1,6 +1,6 @@
 # Current Phase
 
-The **engineering phase began on 2026-08-25** after the dedicated local non-production PostgreSQL test connection was verified. Task 3 durable workflow state is implemented in its assigned isolated worktree and awaits review/commit. The automated CSV compatibility contract remains approved but its follow-on implementation is deferred until foundation Tasks 3, 6, and 7 and the consumer acceptance gate are complete.
+The **engineering phase began on 2026-08-25** after the dedicated local non-production PostgreSQL test connection was verified. Task 3 durable workflow state is committed in its assigned isolated worktree and awaits pull-request review. The automated CSV compatibility contract remains approved but its follow-on implementation is deferred until foundation Tasks 3, 6, and 7 and the consumer acceptance gate are complete.
 
 
 ## Cross-agent implementation checkpoints
@@ -20,14 +20,14 @@ Append a checkpoint at issue start, after every independently testable task, aft
 
 ### Latest handoff checkpoint
 
-- **Timestamp / owner:** 2026-08-25 17:49 +08:00; Codex Task 3 engineering session.
+- **Timestamp / owner:** 2026-08-25 17:55 +08:00; Codex Task 3 engineering session.
 - **Issue:** GitHub #1, `Task 3: add durable PostgreSQL workflow state`, assigned to the authenticated account.
-- **Git state:** local branch `codex/task-3-durable-workflow-state` in `.worktrees/codex-task-3-durable-state`, base HEAD `81546051a6cfbc10d19463a4fe6b7e12a878b0b3`; no PR, merge, or push. Task 3 source, migration, test, plan correction, and this checkpoint are uncommitted pending review.
+- **Git state:** local branch `codex/task-3-durable-workflow-state` in `.worktrees/codex-task-3-durable-state`, Task 3 commit `ef572caf70f5f1c688334f50ddd75b9f8b898dd3`; no PR, merge, or push. The worktree is clean before this post-commit checkpoint update.
 - **Scope:** Implemented Task 3 durable state for FR-017: service-owned workflow executions, exclusive PostgreSQL scope leases, structured execution events/actions, persisted schedules, and a reversible initial Alembic migration. No scheduler, CSV adapter, AIMS access, SQL Server access, or production behavior was added.
 - **Evidence:** The new lease integration test first failed because the persistence module/schema was absent, then passed after migration `0001_operational_state`. Local Python 3.12.7 verification: `python -m pytest -v` — 38 passed; `ruff check src tests alembic` — passed; `python -m mypy src` — passed.
 - **Configuration:** `ESL_TEST_DATABASE_URL` is read from the root `.env` only into the test/migration process; Alembic receives it transiently as `ESL_DATABASE_URL`. No values, paths, SIDs, or credentials are recorded.
 - **External state:** read-only `SELECT 1` confirmed the dedicated local test PostgreSQL connection. Alembic migration `0001_operational_state` created only the five Task 3 tables and its version record in that test database; integration-test rows/leases are transaction-rolled-back.
-- **Risks / next action:** The local test-database credential was rotated and the updated connection/migration revision/lease test were verified; no value is retained in repository documentation. Review the Task 3 diff, commit it, then open the issue pull request.
+- **Risks / next action:** The local test-database credential was rotated and the updated connection/migration revision/lease test were verified; no value is retained in repository documentation. Open the Task 3 pull request and complete review before merging.
 
 ### Previous handoff checkpoint
 
@@ -52,7 +52,7 @@ Append a checkpoint at issue start, after every independently testable task, aft
 # In Progress
 
 - BR-005 promotion precedence is on hold pending POS/merchandising decision.
-- Task 3 durable PostgreSQL workflow state is implemented and awaits review/commit on issue branch `codex/task-3-durable-workflow-state`.
+- Task 3 durable PostgreSQL workflow state is committed as `ef572ca` and awaits pull-request review.
 - Discovery of the unknown operational and business contracts listed below.
 
 # Next
@@ -63,7 +63,7 @@ Append a checkpoint at issue start, after every independently testable task, aft
 4. Obtain SOLUM-supported API documentation and decide the retirement path for compatibility reads.
 5. Confirm promotion precedence, price category, and time/day eligibility.
 6. Measure workload, schedule, latency, failure, and recovery baselines.
-7. Review and commit Task 3, then continue the approved foundation plan task by task with review gates.
+7. Open and review the Task 3 pull request, then continue the approved foundation plan task by task with review gates.
 
 # Decisions Made
 

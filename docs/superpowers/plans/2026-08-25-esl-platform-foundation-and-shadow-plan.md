@@ -231,7 +231,7 @@ def append_event(self, execution_id: UUID, event_type: str, payload: Mapping[str
 
 Add indexes for `scope_key`, `(execution_id, occurred_at)`, and `(workflow_name, store_code, started_at)`.
 
-- [ ] **Step 4: Verify and commit**
+- [x] **Step 4: Verify and commit**
 
 Run: `ESL_DATABASE_URL=<approved-non-production-postgresql-url> alembic upgrade head; ESL_TEST_DATABASE_URL=<approved-non-production-postgresql-url> python -m pytest tests/integration/test_repository.py -v`
 
