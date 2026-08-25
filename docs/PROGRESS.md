@@ -22,12 +22,12 @@ Append a checkpoint at issue start, after every independently testable task, aft
 
 - **Timestamp / owner:** 2026-08-25 17:26 +08:00; Codex Task 3 planning session.
 - **Issue:** GitHub #1, `Task 3: add durable PostgreSQL workflow state`, assigned to the authenticated account.
-- **Git state:** local branch `codex/task-3-durable-workflow-state` in `.worktrees/codex-task-3-durable-state`, HEAD `754e74ab26fbe46bb411ff4c423046cef24ed26f`; no PR, merge, or push. The approved CSV design is committed; its follow-on plan is uncommitted during this checkpoint.
+- **Git state:** local branch `codex/task-3-durable-workflow-state` in `.worktrees/codex-task-3-durable-state`, HEAD `9731e3976c9b9e453a1649e57b0f929830a2a2ae` at checkpoint start; no PR, merge, or push. The approved design, follow-on plan, and reconciled source-of-truth documents are committed; this progress-only checkpoint is the sole uncommitted change.
 - **Scope:** The automated ACL-restricted CSV file/manifest/acknowledgement contract is approved. Its implementation is a separate follow-on plan and does not expand Task 3. No persistence, CSV adapter, scheduler, AIMS, or production behavior was implemented.
 - **Evidence:** The verified legacy SKU CSV has 42 ordered fields, UTF-8 encoding, comma delimiter, DOS line endings, and no header. Local Python 3.12.7 checks recorded 37 tests passing, Ruff passing, and mypy passing.
 - **Configuration:** Task 3 still requires `ESL_TEST_DATABASE_URL` through the approved secret boundary. Future CSV settings are names/contract only; no path, SID, credential, or secret value is stored in documentation.
 - **External state:** no PostgreSQL, SQL Server, AIMS, Jenkins, Hop, physical ESL, or filesystem-delivery action occurred.
-- **Risks / next action:** Task 3 remains blocked on the non-production PostgreSQL URL. The smallest safe next action is to commit the approved CSV follow-on plan, then resume Task 3 only after that URL is provisioned.
+- **Risks / next action:** Task 3 remains blocked on the non-production PostgreSQL URL. The smallest safe next action is to provision `ESL_TEST_DATABASE_URL` outside source control, then write and run the required failing Task 3 lease integration test before implementation.
 
 ### Previous handoff checkpoint
 
