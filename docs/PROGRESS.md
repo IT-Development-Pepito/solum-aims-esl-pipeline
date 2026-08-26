@@ -1,6 +1,6 @@
 # Current Phase
 
-The **engineering phase began on 2026-08-25** after the dedicated local non-production PostgreSQL test connection was verified. Task 3 durable workflow state is committed in its assigned isolated worktree and awaits pull-request review. The automated CSV compatibility contract remains approved but its follow-on implementation is deferred until foundation Tasks 3, 6, and 7 and the consumer acceptance gate are complete.
+The **engineering phase began on 2026-08-25** after the dedicated local non-production PostgreSQL test connection was verified. Task 3 durable workflow state and its CI recovery fix are merged into `develop`; GitHub Actions verified the resulting branch. The automated CSV compatibility contract remains approved but its follow-on implementation is deferred until foundation Tasks 3, 6, and 7 and the consumer acceptance gate are complete.
 
 
 ## Cross-agent implementation checkpoints
@@ -20,14 +20,14 @@ Append a checkpoint at issue start, after every independently testable task, aft
 
 ### Latest handoff checkpoint
 
-- **Timestamp / owner:** 2026-08-25 17:55 +08:00; Codex Task 3 engineering session.
-- **Issue:** GitHub #1, `Task 3: add durable PostgreSQL workflow state`, assigned to the authenticated account.
-- **Git state:** local branch `codex/task-3-durable-workflow-state` in `.worktrees/codex-task-3-durable-state`, Task 3 commit `ef572caf70f5f1c688334f50ddd75b9f8b898dd3`; no PR, merge, or push. The worktree is clean before this post-commit checkpoint update.
-- **Scope:** Implemented Task 3 durable state for FR-017: service-owned workflow executions, exclusive PostgreSQL scope leases, structured execution events/actions, persisted schedules, and a reversible initial Alembic migration. No scheduler, CSV adapter, AIMS access, SQL Server access, or production behavior was added.
-- **Evidence:** The new lease integration test first failed because the persistence module/schema was absent, then passed after migration `0001_operational_state`. Local Python 3.12.7 verification: `python -m pytest -v` — 38 passed; `ruff check src tests alembic` — passed; `python -m mypy src` — passed.
-- **Configuration:** `ESL_TEST_DATABASE_URL` is read from the root `.env` only into the test/migration process; Alembic receives it transiently as `ESL_DATABASE_URL`. No values, paths, SIDs, or credentials are recorded.
-- **External state:** read-only `SELECT 1` confirmed the dedicated local test PostgreSQL connection. Alembic migration `0001_operational_state` created only the five Task 3 tables and its version record in that test database; integration-test rows/leases are transaction-rolled-back.
-- **Risks / next action:** The local test-database credential was rotated and the updated connection/migration revision/lease test were verified; no value is retained in repository documentation. Open the Task 3 pull request and complete review before merging.
+- **Timestamp / owner:** 2026-08-26 08:14 +08:00; Codex Task 3 merge-recovery session.
+- **Issue:** GitHub #1, `Task 3: add durable PostgreSQL workflow state`, closed by merged PR #2; PR #3 delivered its CI recovery fix.
+- **Git state:** remote and root local `develop` are synchronized at `a44d32c7176450e72cf1083137ca703fe666eee2`. PR #2 merged Task 3; PR #3 merged the CI fixture fix. This documentation-only branch is uncommitted pending review.
+- **Scope:** FR-017 durable state is merged into `develop`. The integration fixture now skips only when `ESL_TEST_DATABASE_URL` is absent, while the dedicated local PostgreSQL run still proves exclusive store-scope ownership. No scheduler, CSV adapter, AIMS, SQL Server, or production behavior was added.
+- **Evidence:** PR #2 initially failed CI because no database URL is available in GitHub Actions. PR #3 GitHub Actions checks passed: Python test/lint/type checks and frontend typecheck/test/build. Local CI-equivalent Python verification recorded 37 passed/1 skipped; local PostgreSQL integration recorded 1 passed.
+- **Configuration:** `ESL_TEST_DATABASE_URL` remains external to source control and is required only for the dedicated PostgreSQL integration run. CI intentionally receives no database URL and skips that integration test.
+- **External state:** remote `develop` was created from `origin/main`; PRs #2 and #3 merged automatically into it, and the root local checkout was fast-forwarded after each merge. No production system was changed.
+- **Risks / next action:** `develop` does not yet enforce required GitHub checks, so PR #2 merged before its initial CI failure completed. Obtain repository-owner approval to protect `develop` with the `verify` check before the next feature PR.
 
 ### Previous handoff checkpoint
 
