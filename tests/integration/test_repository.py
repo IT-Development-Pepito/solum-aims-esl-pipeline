@@ -14,7 +14,9 @@ from esl_service.persistence.repository import ExecutionRepository
 def repository() -> Iterator[ExecutionRepository]:
     """Provide a real repository whose state is rolled back after the test."""
 
-    database_url = os.environ["ESL_TEST_DATABASE_URL"]
+    database_url = os.environ.get("ESL_TEST_DATABASE_URL")
+    if database_url is None:
+        pytest.skip("ESL_TEST_DATABASE_URL is required for PostgreSQL integration tests")
     engine = create_engine(database_url)
     connection = engine.connect()
     transaction = connection.begin()
