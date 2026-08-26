@@ -26,11 +26,12 @@ This workflow applies to every GitHub issue and is usable by Codex, Claude, or a
 
 ### 2. Use one branch and worktree per issue
 
-1. Start from current `main`: `git switch main`, then `git pull --ff-only origin main`.
-2. Create branch `issue/<number>-<kebab-case-outcome>`, for example `issue/42-durable-scope-lease`.
-3. Create a sibling worktree inside the ignored directory: `git worktree add .worktrees/issue-42-durable-scope-lease -b issue/42-durable-scope-lease main`.
-4. Work only from that issue worktree. Never mix two issues in one worktree or branch.
-5. GitHub labels are the required per-issue tags. Create an annotated Git tag only for an approved release or tested milestone, using `v<major>.<minor>.<patch>` or `test-<YYYYMMDD>-issue-<number>`; do not create a Git tag for an unreviewed issue branch.
+1. Use remote `develop` as the integration branch. Bootstrap it exactly once from the current remote `main` when `origin/develop` does not exist: `git fetch origin --prune`, then `git push origin origin/main:refs/heads/develop`.
+2. Start every issue from current `develop`: `git switch develop`, then `git pull --ff-only origin develop`.
+3. Create a branch with the `codex/` prefix, for example `codex/issue-42-durable-scope-lease`.
+4. Create a sibling worktree inside the ignored directory: `git worktree add .worktrees/issue-42-durable-scope-lease -b codex/issue-42-durable-scope-lease develop`.
+5. Work only from that issue worktree. Never mix two issues in one worktree or branch.
+6. GitHub labels are the required per-issue tags. Create an annotated Git tag only for an approved release or tested milestone, using `v<major>.<minor>.<patch>` or `test-<YYYYMMDD>-issue-<number>`; do not create a Git tag for an unreviewed issue branch.
 
 ### 3. Implement, test, and checkpoint
 
@@ -42,11 +43,13 @@ This workflow applies to every GitHub issue and is usable by Codex, Claude, or a
 
 ### 4. Open and review the pull request
 
-1. Push the issue branch and open a PR using `.github/pull_request_template.md`.
+1. Push the issue branch and open a PR targeting `develop`, using `.github/pull_request_template.md`.
 2. Use title format `<type>(<area>): <outcome> (#<issue>)`.
 3. Apply the same type, area, and priority labels as the issue; assign the PR to the current authenticated account and request the appropriate review.
 4. A PR must link the issue, name requirement/rule IDs, include commands and results, state migration/configuration/side-effect impact, and identify rollback/recovery where relevant.
-5. Merge only after review and required checks pass. Delete the issue worktree only after the branch is merged and the `PROGRESS.md` checkpoint records the merge commit and next step.
+5. Enable GitHub auto-merge to `develop`. GitHub merges only after required review and checks pass; direct feature-to-`main` merges are not permitted.
+6. After GitHub records the merge commit, update the local integration checkout: `git switch develop`, then `git pull --ff-only origin develop`. Confirm the local and remote `develop` SHAs match.
+7. Delete the issue worktree only after the branch is merged, local `develop` is updated, and the `PROGRESS.md` checkpoint records the merge commit and next step.
 
 ### Cross-agent handoff rule
 
@@ -144,7 +147,7 @@ Any non-zero `unresolved` count blocks automatic completion for affected scope u
 | AIMS compatibility query fails | Mark dependency degraded. | Do not substitute direct DB writes; use approved fallback or wait/escalate. |
 | Malformed input | Quarantine with reason. | Correct source/validation issue; replay only rejected records/window. |
 | Process/server restart | Inspect recovery report. | Resume/reconcile durable runs; do not launch duplicate manual runs. |
-| CSV delivery uncertainty | Treat as unresolved, not successful. | Verify consumer acknowledgement contract; replay only idempotently. CSV files are never the run's authoritative state or comparison evidence. |
+| CSV delivery uncertainty | Treat missing, rejected, malformed, mismatched, or timed-out acknowledgement as unresolved, not successful. | Inspect the durable delivery/event record and matching automatic acknowledgement; never infer completion from file presence or blindly resend. CSV files are never authoritative state or comparison evidence. |
 | Disk/telemetry failure | Protect audit durability, alert operations. | Restore capacity/telemetry then reconcile affected run. |
 
 ## Escalation
