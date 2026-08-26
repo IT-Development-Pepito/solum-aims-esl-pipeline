@@ -20,6 +20,17 @@ Append a checkpoint at issue start, after every independently testable task, aft
 
 ### Latest handoff checkpoint
 
+- **Timestamp / owner:** 2026-08-26 08:xx +08:00; Codex issue-backlog and workflow session.
+- **Issue:** GitHub #33, `[docs] make issue-led develop integration workflow explicit`, assigned to `it20pepito`. GitHub #1 is closed: its durable-state implementation merged through PR #2 and CI recovery through PR #3.
+- **Git state:** `codex/33-issue-led-develop-workflow` worktree, created from local and remote `develop` at `54107c9fb1a52f9f3d01d66f471e9103f8f7002f`; documentation change is in progress and uncommitted.
+- **Scope:** Created five assigned parent epics (#5–#9) and 23 detailed child issues (#10–#32). They cover every functional requirement, FR-001 through FR-030; #23, #24, and #30–#32 remain explicitly blocked pending their documented external contracts. Issue #33 makes issue-led development, meaningful `develop`-based branches, commit/push, `develop` merge, and local fast-forward pull explicit.
+- **Evidence:** Compared the unique `FR-###` identifiers from `docs/SPECIFICATION.md` with the GitHub epic/child bodies: all 30 identifiers are covered. Baseline verification in this worktree using the existing root Python 3.12 virtual environment: `python -m pytest -q` → 37 passed, 1 skipped.
+- **Configuration:** No configuration value was read or changed. `ESL_TEST_DATABASE_URL` remains external to source control.
+- **External state:** Created/edited GitHub issues and labels only; created a local issue worktree. No production, database, Jenkins, Hop, AIMS, or ESL system was changed.
+- **Risks / next action:** `develop` still lacks required-check enforcement. Complete #33 through a PR to `develop`, pull the resulting remote `develop` locally, then select the highest-priority unblocked child issue for implementation.
+
+### Previous handoff checkpoint
+
 - **Timestamp / owner:** 2026-08-26 08:14 +08:00; Codex Task 3 merge-recovery session.
 - **Issue:** GitHub #1, `Task 3: add durable PostgreSQL workflow state`, closed by merged PR #2; PR #3 delivered its CI recovery fix.
 - **Git state:** remote and root local `develop` are synchronized at `a44d32c7176450e72cf1083137ca703fe666eee2`. PR #2 merged Task 3; PR #3 merged the CI fixture fix. This documentation-only branch is uncommitted pending review.
@@ -52,7 +63,7 @@ Append a checkpoint at issue start, after every independently testable task, aft
 # In Progress
 
 - BR-005 promotion precedence is on hold pending POS/merchandising decision.
-- Task 3 durable PostgreSQL workflow state is committed as `ef572ca` and awaits pull-request review.
+- The GitHub requirement backlog is ready: parent epics #5–#9 and assigned child issues #10–#32. Implement only a selected, unblocked child issue at a time through the issue-led `develop` workflow.
 - Discovery of the unknown operational and business contracts listed below.
 
 # Next
@@ -63,7 +74,7 @@ Append a checkpoint at issue start, after every independently testable task, aft
 4. Obtain SOLUM-supported API documentation and decide the retirement path for compatibility reads.
 5. Confirm promotion precedence, price category, and time/day eligibility.
 6. Measure workload, schedule, latency, failure, and recovery baselines.
-7. Open and review the Task 3 pull request, then continue the approved foundation plan task by task with review gates.
+7. Select the highest-priority unblocked child issue from #5–#9, then follow the issue-led `develop` workflow end to end.
 
 # Decisions Made
 
@@ -77,6 +88,7 @@ Append a checkpoint at issue start, after every independently testable task, aft
 - **AD-008:** Use FastAPI for the internal backend/API and React + TypeScript + Vite + Tailwind CSS for the browser UI. Google Stitch exports are versioned design handoffs, not production application code; React uses authenticated FastAPI endpoints only.
 - **AD-013:** `develop` is the remote integration branch. Issue branches start from it, target it through pull requests, use GitHub auto-merge only after required checks/review, and local `develop` is fast-forwarded after each merge.
 - **AD-012:** Use an automated ACL-restricted CSV/ready-manifest/acknowledgement handshake for bounded compatibility delivery. PostgreSQL remains authoritative for lifecycle/audit; filesystem presence is not completion, no blind resend is permitted, and the adapter stays disabled until consumer acceptance.
+- **AD-014:** Every implementation is traced to one GitHub issue. A meaningful issue/epic branch starts from current `develop`, is committed and pushed after verification, merges back to `develop`, and is followed by a local fast-forward pull of remote `develop`.
 
 # Risks / Blockers
 

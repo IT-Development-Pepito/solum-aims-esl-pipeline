@@ -16,11 +16,13 @@ This is the operating model for the target internal web application. The applica
 
 This workflow applies to every GitHub issue and is usable by Codex, Claude, or a human developer. It governs repository work only; it does not authorize production database, AIMS, SQL Server, Hop, Jenkins, or ESL changes.
 
+**Mandatory rule:** every implementation change—application code, tests, configuration, infrastructure, or documentation—must be tracked by a GitHub issue before work begins. Do not create an ad-hoc implementation branch or commit work that is not in an issue's accepted scope.
+
 ### 1. Create and prepare the issue
 
 1. Use the title format **`[area] imperative outcome`**, for example: `[persistence] add durable scope lease`.
 2. State the problem, requirement/rule IDs, acceptance criteria, non-goals, operational risk, and test evidence required for closure.
-3. Add GitHub labels (the per-issue tags): exactly one type label (`type:feature`, `type:bug`, `type:chore`, `type:docs`, or `type:security`), one or more area labels (`area:domain`, `area:persistence`, `area:adapters`, `area:web`, `area:runtime`, `area:ci`, or `area:docs`), and a priority label (`priority:p0` through `priority:p3`). Add `blocked` only while a named dependency prevents progress.
+3. Add GitHub labels (the per-issue tags): exactly one type label (`type:feature`, `type:bug`, `type:chore`, `type:docs`, or `type:security`), one or more area labels (`area:domain`, `area:ingestion`, `area:workflow`, `area:persistence`, `area:adapters`, `area:operations`, `area:runtime`, `area:web`, `area:observability`, `area:ci`, or `area:docs`), and a priority label (`priority:p0` through `priority:p3`). A parent epic also carries `kind:epic`; add `blocked` only while a named dependency prevents progress.
 4. Assign the issue to the currently authenticated GitHub account. With GitHub CLI use `gh issue edit <number> --add-assignee "@me"`; confirm the assignee before work starts.
 5. Record the issue number and accepted scope in `docs/PROGRESS.md` before implementation.
 
@@ -28,7 +30,7 @@ This workflow applies to every GitHub issue and is usable by Codex, Claude, or a
 
 1. Use remote `develop` as the integration branch. Bootstrap it exactly once from the current remote `main` when `origin/develop` does not exist: `git fetch origin --prune`, then `git push origin origin/main:refs/heads/develop`.
 2. Start every issue from current `develop`: `git switch develop`, then `git pull --ff-only origin develop`.
-3. Create a branch with the `codex/` prefix, for example `codex/issue-42-durable-scope-lease`.
+3. Create a meaningful branch from that exact `develop` HEAD with the `codex/` prefix. Its name must identify the issue or epic and outcome, for example `codex/42-durable-scope-lease` or `codex/epic-6-workflow-recovery`.
 4. Create a sibling worktree inside the ignored directory: `git worktree add .worktrees/issue-42-durable-scope-lease -b codex/issue-42-durable-scope-lease develop`.
 5. Work only from that issue worktree. Never mix two issues in one worktree or branch.
 6. GitHub labels are the required per-issue tags. Create an annotated Git tag only for an approved release or tested milestone, using `v<major>.<minor>.<patch>` or `test-<YYYYMMDD>-issue-<number>`; do not create a Git tag for an unreviewed issue branch.
@@ -38,17 +40,18 @@ This workflow applies to every GitHub issue and is usable by Codex, Claude, or a
 1. Read `AGENTS.md`, `docs/PROGRESS.md`, and the issue before changing files.
 2. Write or update the focused failing test first for production behavior. Run it and capture the expected failure before implementing the minimum change.
 3. Run focused tests after each behavior change, then the relevant lint, type, build, and integration checks before committing.
-4. Use meaningful Conventional Commit-style messages: `feat(persistence): add scope lease (#42)`, `fix(config): reject broad service SID (#42)`, `docs(workflow): add issue handoff rules (#42)`.
-5. Update the issue and `docs/PROGRESS.md` checkpoint after each independently testable task, review result, blocker, migration, configuration contract, or external side effect.
+4. Commit the completed, verified issue scope with a meaningful Conventional Commit-style message, for example `feat(persistence): add scope lease (#42)`, `fix(config): reject broad service SID (#42)`, or `docs(workflow): add issue handoff rules (#42)`.
+5. Push the implementation branch to the remote repository before opening its pull request: `git push -u origin <branch>`.
+6. Update the issue and `docs/PROGRESS.md` checkpoint after each independently testable task, review result, blocker, migration, configuration contract, or external side effect.
 
 ### 4. Open and review the pull request
 
-1. Push the issue branch and open a PR targeting `develop`, using `.github/pull_request_template.md`.
+1. Open a PR from the already-pushed issue branch targeting `develop`, using `.github/pull_request_template.md`.
 2. Use title format `<type>(<area>): <outcome> (#<issue>)`.
 3. Apply the same type, area, and priority labels as the issue; assign the PR to the current authenticated account and request the appropriate review.
 4. A PR must link the issue, name requirement/rule IDs, include commands and results, state migration/configuration/side-effect impact, and identify rollback/recovery where relevant.
-5. Enable GitHub auto-merge to `develop`. GitHub merges only after required review and checks pass; direct feature-to-`main` merges are not permitted.
-6. After GitHub records the merge commit, update the local integration checkout: `git switch develop`, then `git pull --ff-only origin develop`. Confirm the local and remote `develop` SHAs match.
+5. After the applicable review and required checks pass, enable auto-merge to `develop` (or complete the approved merge if auto-merge is unavailable). When branch protection is not configured, the merging owner must first verify the visible successful review/check evidence. Direct feature-to-`main` merges are not permitted.
+6. After GitHub records the merge commit, update the local integration checkout immediately: `git switch develop`, then `git pull --ff-only origin develop`. Confirm the local and remote `develop` SHAs match.
 7. Delete the issue worktree only after the branch is merged, local `develop` is updated, and the `PROGRESS.md` checkpoint records the merge commit and next step.
 
 ### Cross-agent handoff rule
