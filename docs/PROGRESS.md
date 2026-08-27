@@ -21,13 +21,13 @@ Append a checkpoint at issue start, after every independently testable task, aft
 ### Latest handoff checkpoint
 
 - **Timestamp / owner:** 2026-08-27 17:45 +08:00; Codex promotion-evidence reconciliation session.
-- **Issue:** GitHub #35, `[docs] reconcile promotion-rule evidence and SQL review risk`, assigned to `it20pepito`. Created child issues #36 (promotion eligibility/UOM/atomic state) and #37 (compatibility selection/ambiguity audit) under epic #5.
+- **Issue:** GitHub #35, `[docs] reconcile promotion-rule evidence and SQL review risk`, assigned to `it20pepito`. Created child issues #36 (promotion eligibility/UOM/atomic state) and #37 (compatibility selection/ambiguity audit) under epic #5, plus P0 SQL-review gate #38.
 - **Git state:** `codex/35-reconcile-promotion-evidence` branched from local and remote `develop` at `466e0c0a0ae854981e6e8b14ae8c1d26c3765186`; supplied evidence files and documentation reconciliation are uncommitted.
-- **Scope:** New reference `docs/sql-server/ESL_Promotion_Business_Logic_and_Business_Rules_Reference.md` is current evidence. The latest supplied review-only procedure adds Patch 2.5 promotion handling; its apparent direct self-invocation is recorded as a SQL-review risk rather than execution proof. Requirements, architecture, workflow, and affected backlog items are being reconciled without implementation or production changes.
-- **Evidence:** Inspected the supplied reference and UTF-16 procedure text. Confirmed source rules include date/time eligibility, category-`001` price, PFS exclusion, CLR handling, no invented non-CLR conversion, scalable-item ordering, raw `DISC_TEXT`, atomic state, store/item/UOM key, and observable ambiguity. Formal campaign winner priority, same-economic display-term selection, final weekday policy, and authoritative non-CLR conversion remain UNKNOWN / NEEDS-DISCOVERY.
+- **Scope:** New reference `docs/sql-server/ESL_Promotion_Business_Logic_and_Business_Rules_Reference.md` is current evidence. The latest supplied review-only procedure adds Patch 2.5 promotion handling; its direct self-invocation is recorded as an apparent unbounded-recursion defect, not execution proof. Requirements, architecture, workflow, and affected backlog items are being reconciled without implementation or production changes.
+- **Evidence:** Inspected the supplied reference and UTF-16 procedure text. The reference directs target rules for date/time eligibility, category-`001` price, PFS exclusion, CLR handling, no invented non-CLR conversion, scalable-item ordering, raw `DISC_TEXT`, atomic state, store/item/UOM key, and observable ambiguity. The review-only procedure still filters campaign status, its date filter does not establish cross-midnight parity, and its raw type/price/percent comparison does not establish calculated-economic parity. Formal winner priority, same-economic display-term selection, final weekday policy, authoritative non-CLR conversion, and deployed parity remain UNKNOWN / NEEDS-DISCOVERY.
 - **Configuration:** No configuration value, credential, or connection string was read or changed.
-- **External state:** Created GitHub #35–#37 only. No database, Jenkins, Hop, AIMS, device, or production system was changed.
-- **Risks / next action:** Complete documentation and issue-body updates, verify documentation and tests, then submit #35 through a PR to `develop`. The apparent direct procedure self-invocation needs DBA/SQL-owner review before any deployment decision.
+- **External state:** Created GitHub #35–#38 only. No database, Jenkins, Hop, AIMS, device, or production system was changed.
+- **Risks / next action:** Complete documentation and issue-body updates, verify documentation and tests, then submit #35 through a PR to `develop`. Issue #38 requires DBA/SQL-owner review before any procedure execution or deployment decision.
 
 ### Previous handoff checkpoint
 
@@ -76,6 +76,7 @@ Append a checkpoint at issue start, after every independently testable task, aft
 - BR-005 promotion precedence is on hold pending POS/merchandising decision.
 - The GitHub requirement backlog is ready: parent epics #5–#9 and assigned child issues #10–#32. Implement only a selected, unblocked child issue at a time through the issue-led `develop` workflow.
 - Promotion-rule child issues #36 and #37 are ready under epic #5; formal winner priority, same-economic campaign terms, non-CLR conversion, and final weekday policy remain unresolved.
+- P0 issue #38 blocks source-adapter parity until SQL-owner review removes or explains the direct procedure self-invocation and supplies non-production boundary evidence.
 - Discovery of the unknown operational and business contracts listed below.
 
 # Next
@@ -86,7 +87,7 @@ Append a checkpoint at issue start, after every independently testable task, aft
 4. Obtain SOLUM-supported API documentation and decide the retirement path for compatibility reads.
 5. Confirm promotion precedence, price category, and time/day eligibility.
 6. Measure workload, schedule, latency, failure, and recovery baselines.
-7. Obtain the merchandising/POS decisions for promotion priority, same-economic campaign terms, non-CLR UOM conversion, and missing weekday metadata; then implement #36 and #37 through the issue-led `develop` workflow.
+7. Obtain reference-policy approval and representative deployed parity cases for campaign status/date-time, cross-midnight, calculated-economic comparison, and existing-state selection; resolve #38 before source-adapter parity, then implement #36 and #37 through the issue-led `develop` workflow.
 
 # Decisions Made
 
@@ -101,7 +102,7 @@ Append a checkpoint at issue start, after every independently testable task, aft
 - **AD-013:** `develop` is the remote integration branch. Issue branches start from it, target it through pull requests, use GitHub auto-merge only after required checks/review, and local `develop` is fast-forwarded after each merge.
 - **AD-012:** Use an automated ACL-restricted CSV/ready-manifest/acknowledgement handshake for bounded compatibility delivery. PostgreSQL remains authoritative for lifecycle/audit; filesystem presence is not completion, no blind resend is permitted, and the adapter stays disabled until consumer acceptance.
 - **AD-014:** Every implementation is traced to one GitHub issue. A meaningful issue/epic branch starts from current `develop`, is committed and pushed after verification, merges back to `develop`, and is followed by a local fast-forward pull of remote `develop`.
-- **AD-015:** Promotion behavior is extracted into independently testable domain rules. The initial target preserves verified compatibility behavior, records ambiguity, and does not invent a campaign winner, generic member filter, non-CLR UOM conversion, or manual-text parsing rule.
+- **AD-015:** Promotion behavior is extracted into independently testable domain rules. The initial target follows the supplied reference-directed policy, records ambiguity, and does not invent a campaign winner, generic member filter, non-CLR UOM conversion, or manual-text parsing rule; deployed legacy parity is separately measured and not assumed.
 
 # Risks / Blockers
 
@@ -111,7 +112,7 @@ Append a checkpoint at issue start, after every independently testable task, aft
 - **Medium:** Current AIMS reads rely on database structures that are not vendor-supported contracts.
 - **Medium:** Current AIMS page-change traffic is HTTP in the supplied artifact; support, authentication, and TLS capability must be verified.
 - **Medium:** No current workload, timing, availability, RPO/RTO, or recovery baseline was supplied.
-- **High:** The latest supplied `RefreshESL_New` is marked review/test only and contains an apparent direct self-invocation. Its safe production execution/deployment is unverified and requires DBA/SQL-owner review.
+- **High:** The latest supplied `RefreshESL_New` is marked review/test only and directly invokes itself. This indicates apparent unbounded recursion if executed; its safe deployment and production parity are unverified and require #38 DBA/SQL-owner review.
 
 # Discoveries
 
@@ -126,9 +127,9 @@ Append a checkpoint at issue start, after every independently testable task, aft
 - **VERIFIED:** The live AIMS Dashboard OpenAPI documents `POST /common/labels/page` for page changes, but declares no API security scheme. It accepts a store query parameter and a `pageChangeList` of label/page pairs and returns response code/message plus batch ID.
 - **VERIFIED:** CSV samples provide evidence of Page 1/Page 2/Page 3/Page 4 operational outputs but do not identify a SKU CSV consumer or acknowledgement contract.
 - **VERIFIED:** The legacy SKU output definition contains 42 ordered fields, UTF-8 encoding, comma delimiter, DOS line endings, and no header. The approved target contract adds automatic atomic publication and matching acknowledgement without treating files as durable state.
-- **VERIFIED:** The newly supplied promotion reference defines the current compatibility baseline: primary date/time eligibility, category-`001` regular price, explicit PFS exclusion, structured promotion validation, CLR normalization, no invented non-CLR conversion, post-calculation KGS display transformation, raw `DISC_TEXT`, atomic promotion state, and store/item/selling-UOM isolation.
-- **VERIFIED:** The same reference requires observable ambiguity for different economic outcomes and same-economic/different-term outcomes, while formal priority remains unresolved.
-- **VERIFIED:** The latest supplied procedure source is review/test only and has an apparent direct self-invocation after entering its body; no safe execution evidence was supplied.
+- **VERIFIED:** The newly supplied promotion reference directs target policy for primary date/time eligibility, category-`001` regular price, explicit PFS exclusion, structured promotion validation, CLR normalization, no invented non-CLR conversion, post-calculation KGS display transformation, raw `DISC_TEXT`, atomic promotion state, and store/item/selling-UOM isolation. It is not by itself deployed-parity evidence.
+- **VERIFIED:** The same reference requires observable ambiguity for different calculated economic outcomes and same-economic/different-term outcomes, while formal priority and effective-price/rounding comparison remain unresolved.
+- **VERIFIED:** The latest supplied procedure source is review/test only, directly invokes itself, filters campaign status, and does not establish cross-midnight or calculated-economic parity; #38 captures the SQL-review gate.
 - **INFERRED:** The supplied artifacts are a snapshot/backup and are not a complete representation of production.
 
 # Verification Performed
