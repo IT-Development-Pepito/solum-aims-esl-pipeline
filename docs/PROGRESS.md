@@ -85,7 +85,7 @@ Append a checkpoint at issue start, after every independently testable task, aft
 2. Retain/export SQL Agent history with calendar dates and root-cause detail if it becomes available; the supplied history is a limited snapshot.
 3. Identify the legacy CSV consumer owner and validate the approved automated file/manifest/acknowledgement contract in non-production.
 4. Obtain SOLUM-supported API documentation and decide the retirement path for compatibility reads.
-5. Confirm promotion precedence, price category, and time/day eligibility.
+5. Confirm promotion precedence, same-economic campaign terms, non-CLR UOM conversion, and final weekday-metadata policy.
 6. Measure workload, schedule, latency, failure, and recovery baselines.
 7. Obtain reference-policy approval and representative deployed parity cases for campaign status/date-time, cross-midnight, calculated-economic comparison, and existing-state selection; resolve #38 before source-adapter parity, then implement #36 and #37 through the issue-led `develop` workflow.
 
