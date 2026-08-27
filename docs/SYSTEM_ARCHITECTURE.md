@@ -42,7 +42,8 @@ Jenkins (job names/schedules UNKNOWN)
 
 | Artifact | Location | Type / purpose | Inputs / outputs | Trigger / failure handling | Class | Replacement area |
 | --- | --- | --- | --- | --- | --- | --- |
-| `RefreshESL_New` | `docs/sql-server/Store_Procedure_Refresh_ESL.sql` | Stored procedure builds ESL record state. | Retail tables → `tb_ESL`. | Called by `Refresh ESL Data`; SQL transaction/catch verified. | VERIFIED | Ingestion, rules, persistence orchestration. |
+| `RefreshESL_New` | `docs/sql-server/Store_Procedure_Refresh_ESL.sql` | Stored procedure builds ESL record state; latest supplied text contains Patch 2.5 promotion changes. | Retail tables → `tb_ESL`. | Procedure text has transaction/catch handling but is marked review/test only and contains an apparent direct self-invocation; safe production execution is not established. | VERIFIED source text / safe deployment NEEDS-DISCOVERY | Ingestion, rules, persistence orchestration. |
+| Promotion business-rule reference | `docs/sql-server/ESL_Promotion_Business_Logic_and_Business_Rules_Reference.md` | Current compatibility baseline for promotion eligibility, pricing, UOM, selection, and audit. | Operational campaigns + supporting metadata → promotion state. | Distinguishes confirmed rules from unresolved policy. | VERIFIED | Domain-rule extraction and parity tests. |
 | `Refresh ESL Data` | `docs/sql-server/job_refresh_esl.sql` | SQL Agent job executes the stored procedure. | `EXEC dbo.RefreshESL_New`. | Every 30 min, 07:00–23:59 daily; zero retries; step fails job. | VERIFIED | Scheduler/retry replacement. |
 | `tb_ESL` DDL | `docs/sql-server/tb_ESL_DDL.sql` | Legacy ESL data store. | Product/price/stock/promo record. | Existing table/indexes. | VERIFIED | SQL read model/source compatibility. |
 | Discount troubleshooting report | `docs/sql-server/...Discount_Mismatch...md` | Business-rule evidence and risks. | Case study. | N/A. | VERIFIED | Rule-discovery baseline. |
@@ -60,7 +61,7 @@ Jenkins (job names/schedules UNKNOWN)
 
 ### Known gaps
 
-Jenkins job configuration/schedules/command lines, runtime identity, production history, legacy CSV consumer identity/acceptance, vendor support lifecycle/authentication policy, exact gateway topology, and workload baseline are **UNKNOWN / NEEDS-DISCOVERY**. The target automated CSV acknowledgement contract is approved; its environment-specific timeout and retention remain disabled pending consumer acceptance.
+Jenkins job configuration/schedules/command lines, runtime identity, production history, legacy CSV consumer identity/acceptance, vendor support lifecycle/authentication policy, exact gateway topology, and workload baseline are **UNKNOWN / NEEDS-DISCOVERY**. Promotion-priority policy, same-economic campaign-term selection, authoritative non-CLR UOM conversion, and the final missing-weekday-metadata policy are also **UNKNOWN / NEEDS-DISCOVERY**. The target automated CSV acknowledgement contract is approved; its environment-specific timeout and retention remain disabled pending consumer acceptance.
 
 ## 3. Business and data flow
 
@@ -83,6 +84,12 @@ source snapshot/window → extraction → validation → canonical transformatio
 → domain decision → idempotent AIMS/file action → acknowledgement
 → durable audit/reconciliation → metrics/logs/alerts
 ```
+
+### Promotion decision boundary
+
+The domain layer evaluates the latest operational campaign source on every run. It uses date/time (including cross-midnight windows) as the primary eligibility rule, category `001` as regular price, an explicit PFS exclusion, actual selling-UOM resolution, and scalable-item display transformation only after economic calculation. `FactCampaign` weekday data and campaign status are supporting metadata rather than the primary authority. Missing weekday metadata is recorded and follows the current compatibility fallback; explicit inactive weekday metadata is distinct.
+
+The result is exactly one atomic `PromotionState` for a `STORE_CODE + ITEM_CODE + SELLING_UOM` key, or a deterministic rejection/unresolved outcome. Raw `DISC_TEXT` is retained as display/audit information and is not used to infer structured logic. The current compatibility strategy must not invent a campaign winner: different economic outcomes and same-economic/different-term outcomes are observable anomaly classes until a business policy is approved.
 
 ## 4. Target architecture
 
@@ -111,13 +118,13 @@ flowchart TB
 | --- | --- | --- |
 | Scheduler / operations interface | Timed/manual invocation, authorization, status, disable/enable. | Implement business rules or bypass locks. |
 | Workflow orchestrator | State machine, dependency order, locks, checkpoints, retry scheduling. | Embed SQL/AIMS transport details. |
-| Domain rules | Deterministic eligibility, mapping, page decision, canonical idempotency input. | Query databases or issue HTTP. |
+| Domain rules | Deterministic eligibility, category-`001` price validation, PFS exclusion, UOM resolution, promotion-state construction, ambiguity classification, mapping, page decision, and canonical idempotency input. | Query databases, issue HTTP, parse manual display text as a primary rule source, or invent campaign priority/conversion policy. |
 | SQL Server adapter | Snapshot/query source data and map to domain records. | Own workflow state or rules. |
 | AIMS supported-API adapter | Mutate/confirm AIMS through documented vendor interface. | Reach into AIMS database tables. |
 | Compatibility adapter | Bounded read-only queries needed for cutover parity. | Write, become a general AIMS repository, or leak schema to domain. |
 | CSV compatibility delivery adapter | Produce/acknowledge files only if an identified legacy consumer remains required. | Act as workflow state, comparison evidence, audit system, or treat directory presence as success. |
 | Execution state/audit store | Durable run state, locks, attempts, canonical hashes/diffs, action ledger, configurations, and evidence. | Become a second retail/AIMS source of record or rely on local files for recovery. |
-| Reconciliation service | Compare expected, processed, rejected, submitted, acknowledged, and unresolved records. | Retry external actions without orchestration policy. |
+| Reconciliation service | Compare expected, processed, rejected, promotion-anomaly, submitted, acknowledged, and unresolved records; retain candidate/selection evidence. | Retry external actions without orchestration policy or suppress unresolved ambiguity. |
 | Observability/configuration | Correlated telemetry, health, validated external configuration/secrets references. | Store plaintext secrets in logs or repository. |
 
 ## 5. Deployment architecture
@@ -153,6 +160,7 @@ Before implementation, score candidates against SQL Server drivers, Windows serv
 | AIMS rejection/unexpected response | Contract validation/error code. | Usually non-retryable until corrected. | Preserve payload/result; do not substitute direct DB write. | Quarantine/review. |
 | Compatibility DB unavailable/schema drift | Query/schema validation. | Retry only availability errors. | No mutation depends solely on unverified read. | Disable adapter/use approved fallback; investigate vendor contract. |
 | Malformed source/configuration | Validation/startup check. | Non-retryable until corrected. | Quarantine; no side effect. | Correct approved config/data. |
+| Promotion ambiguity or unsupported UOM | Domain validation/ambiguity record with candidate evidence. | Non-retryable until a correction or approved policy exists. | Do not invent a conversion/winner or submit a new ambiguous promotion state. | Review source, preserve compatibility evidence, escalate business-rule decision. |
 | Process crash/server reboot | Startup recovery scans active leases/checkpoints. | Resume or reconcile. | Never assume unknown external submission failed. | Review recovery report. |
 | Disk exhaustion / logging outage | Host/telemetry health. | Stop new work safely when durability/audit cannot be ensured. | Preserve state before action. | Restore capacity. |
 | Expired/rotated credential | Authentication health. | Retry after approved rotation only. | No fallback to embedded credentials. | Rotate secret and validate. |
@@ -177,3 +185,4 @@ Trust boundaries are SQL Server, AIMS API, optional read-only AIMS PostgreSQL, f
 | AD-010 | Accept the high-spec Windows 10 PC as the production host under operational risk acceptance; deny public ingress and use least-privilege private network routes. | This removes the unavailable Windows Server dependency while recording the operational controls and future-platform improvement path. |
 | AD-011 | Use FastAPI for the internal backend/API and React + TypeScript + Vite + Tailwind CSS for the browser UI; use Google Stitch as a versioned design handoff. | The stack supports typed API contracts, controlled Windows deployment, and systematic conversion of Stitch exports into maintainable, tested components. |
 | AD-012 | Use an automated ACL-restricted CSV/ready-manifest/acknowledgement handshake for bounded compatibility delivery. | The legacy consumer is unknown, so PostgreSQL remains authoritative and file presence is never completion. The adapter is disabled until consumer acceptance and adds no HTTP surface. |
+| AD-013 | Extract promotion behavior into explicit, independently testable domain rules and retain a compatibility selection strategy until business priority is approved. | The new business-rule reference confirms eligibility, pricing, UOM, atomic-state, and anomaly boundaries while retaining winner priority, non-CLR conversion, and final weekday policy as discovery gates. |

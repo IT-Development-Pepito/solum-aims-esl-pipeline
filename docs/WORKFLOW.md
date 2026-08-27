@@ -85,6 +85,13 @@ Expected implementation outcome: liveness indicates the process is running; read
 3. Review terminal state, failed step, retry count, timeout/error class, configuration/rule version, checkpoint, source window, and affected-record counts.
 4. Query the target database's structured execution/event logs and open correlated metrics using the execution ID. Do not treat a missing log line as evidence an external action did not occur.
 
+### Review promotion anomalies
+
+1. Query the execution’s promotion anomaly records by store, item, selling UOM, and rule version; distinguish rejection from unresolved compatibility selection.
+2. For an affected record, inspect raw campaign values, date/time eligibility, category-`001` regular price, source/resolved UOM, raw `DISC_TEXT`, weekday metadata/fallback, calculated economic outcome, and every eligible candidate.
+3. Treat `PROMO_PRIORITY_DIFFERENT_ECONOMIC`, `DISPLAY_PRIORITY_SAME_ECONOMIC`, and unsupported non-CLR UOM conversion as business/data-review outcomes. Do not choose a winner, infer a unit conversion, or parse manual display text to force a result.
+4. If an approved policy or corrected source is supplied, record its reference and create a bounded replay. Otherwise retain the anomaly and compatibility evidence for merchandising/POS escalation.
+
 ### Manually trigger a workflow
 
 1. Verify readiness and that the schedule is not already owning the same scope.
@@ -149,6 +156,7 @@ Any non-zero `unresolved` count blocks automatic completion for affected scope u
 | AIMS rejection | Capture response and rule/config version. | Correct data/config/rule only through approved process; replay bounded scope. |
 | AIMS compatibility query fails | Mark dependency degraded. | Do not substitute direct DB writes; use approved fallback or wait/escalate. |
 | Malformed input | Quarantine with reason. | Correct source/validation issue; replay only rejected records/window. |
+| Promotion ambiguity / unsupported UOM | Preserve candidate and calculation evidence; do not treat it as a transport failure. | Escalate to merchandising/POS or correct approved source; replay only after the rule/data decision is recorded. |
 | Process/server restart | Inspect recovery report. | Resume/reconcile durable runs; do not launch duplicate manual runs. |
 | CSV delivery uncertainty | Treat missing, rejected, malformed, mismatched, or timed-out acknowledgement as unresolved, not successful. | Inspect the durable delivery/event record and matching automatic acknowledgement; never infer completion from file presence or blindly resend. CSV files are never authoritative state or comparison evidence. |
 | Disk/telemetry failure | Protect audit durability, alert operations. | Restore capacity/telemetry then reconcile affected run. |
