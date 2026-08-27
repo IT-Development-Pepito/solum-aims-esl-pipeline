@@ -34,13 +34,13 @@ The system must not assume that a campaign definition is immutable after it has 
 
 The replacement system should distinguish between:
 
-1. **Operational source data**  
+1. **Operational source data**
    Source tables that represent the campaign configuration used by store operations.
 
-2. **Derived or warehouse metadata**  
+2. **Derived or warehouse metadata**
    Data such as `FactCampaign` that may be used as supporting information but should not automatically override the operational campaign data.
 
-3. **ESL final state**  
+3. **ESL final state**
    The final article/promotion state that will be synchronized to SOLUM AIMS / ESL.
 
 The replacement system should always preserve traceability between:
