@@ -1,6 +1,5 @@
 """FR-004/FR-005/BR-018 tests for immutable canonical ESL records."""
 
-import hashlib
 import json
 from dataclasses import FrozenInstanceError, replace
 from datetime import UTC, date, datetime, time, timedelta, timezone
@@ -46,12 +45,30 @@ def test_fr_004_serializes_decimals_dates_enums_and_hashes_deterministically() -
     assert payload["provenance"]["source_updated_at"] == "2026-08-28T01:59:00+00:00"
     assert payload["pricing"]["display_price_basis"] == "100GR"
     assert canonical_hash(record) == canonical_hash(replace(record, inventory=replace(record.inventory, stock_on_hand=Decimal("15.5000"))))
-    expected_hash = hashlib.sha256(
-        json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode(
-            "utf-8"
-        )
-    ).hexdigest()
-    assert canonical_hash(record) == expected_hash
+    expected_canonical_json = (
+        '{"display_decision":{"current_page":1,"desired_page":2,"reason_code":"PRICE_CHANGED"},'
+        '"expiry":{"early_expiry_date":"2026-09-15","expiry_days":14},'
+        '"inventory":{"display_quantity":"8","maximum_quantity":"20","minimum_quantity":"2",'
+        '"product_weight":"1","stock_on_hand":"15.5"},'
+        '"key":{"item_code":"101024011793","selling_uom":"KGS","store_code":"084"},'
+        '"pricing":{"calculation_version":"rules-v1","currency":"IDR","display_price_basis":"100GR",'
+        '"display_regular_price":"5000","source_member_price":"49000","source_price_basis":"KG",'
+        '"source_regular_price":"50000"},'
+        '"product":{"barcode":"101024011793","brand":"SOLUM","class_rotation":"A",'
+        '"consignment":false,"department":"BEVERAGES","division":"GROCERY","item_class":"COFFEE",'
+        '"item_name":"Arabica Coffee","item_shortname":"Arabica","nfc_url":"https://nfc.example/101024011793",'
+        '"product_url":"https://products.example/101024011793","red_list":false,"returnable":false,'
+        '"subclass":"WHOLE_BEAN"},"promotion_state":null,'
+        '"provenance":{"adapter":"sql-server-source-v1","configuration_version":"config-v1",'
+        '"rule_version":"rules-v1","source_references":["tb_ESL:084:101024011793"],'
+        '"source_updated_at":"2026-08-28T01:59:00+00:00","source_watermark":"2026-08-28T10:00:00+08:00"},'
+        '"schema_version":"canonical-v1"}'
+    )
+    assert (
+        json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+        == expected_canonical_json
+    )
+    assert canonical_hash(record) == "369f225d5f871f993c9140c74ea1c1920fc469bff24b52f2e2c7f0b300d36c85"
 
 
 def test_fr_004_rejects_float_values_from_canonical_serialization() -> None:
