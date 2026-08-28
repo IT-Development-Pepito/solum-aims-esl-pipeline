@@ -16,8 +16,18 @@ class FieldDifference:
 
 def diff_records(left: object, right: object) -> tuple[FieldDifference, ...]:
     """Return path-sorted, recursive canonical payload differences."""
+    return diff_payloads(canonical_payload(left), canonical_payload(right))
+
+
+def diff_payloads(left: JSONValue, right: JSONValue) -> tuple[FieldDifference, ...]:
+    """Diff two already-canonical payloads, such as rows reloaded from JSONB.
+
+    This makes a comparison reproducible from durable state after a restart or
+    retry without re-reading a physical file (FR-027). Inputs must already be
+    canonical; untyped values are never converted here.
+    """
     differences: list[FieldDifference] = []
-    _diff_values(canonical_payload(left), canonical_payload(right), "", differences)
+    _diff_values(left, right, "", differences)
     return tuple(sorted(differences, key=lambda difference: difference.path))
 
 

@@ -1,4 +1,4 @@
-"""SQLAlchemy models for workflow state and audit records."""
+"""SQLAlchemy models for workflow execution state and audit records."""
 
 from datetime import datetime
 from uuid import UUID, uuid4
@@ -6,11 +6,9 @@ from uuid import UUID, uuid4
 from sqlalchemy import Boolean, DateTime, ForeignKey, Index, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PostgreSQLUUID
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column
 
-
-class Base(DeclarativeBase):
-    """Base class for the service-owned PostgreSQL state schema."""
+from esl_service.persistence.models.base import Base
 
 
 class WorkflowExecution(Base):
@@ -109,6 +107,19 @@ class WorkflowSchedule(Base):
     cron_expression: Mapped[str] = mapped_column(Text, nullable=False)
     timezone: Mapped[str] = mapped_column(String(100), nullable=False)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # Nullable until 0008 makes it required after an explicit backfill and
+    # preflight; new application writes must already supply a version.
+    configuration_version_id: Mapped[UUID | None] = mapped_column(
+        PostgreSQLUUID(as_uuid=True),
+        ForeignKey("configuration_version.id", ondelete="RESTRICT"),
+        nullable=True,
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
     )

@@ -19,6 +19,9 @@ from esl_service.domain import (
 
 def canonical_record(
     *,
+    store_code: str = "084",
+    item_code: str = "101024011793",
+    selling_uom: str = "KGS",
     source_regular_price: Decimal | None = Decimal(50000),
     display_regular_price: Decimal | None = Decimal(5000),
     source_price_basis: PriceBasis = PriceBasis.KG,
@@ -27,7 +30,7 @@ def canonical_record(
 ) -> CanonicalEslRecord:
     """Build the approved complete 084/101024011793/KGS/IDR canonical record."""
     return CanonicalEslRecord(
-        key=CanonicalKey("084", "101024011793", "KGS"),
+        key=CanonicalKey(store_code, item_code, selling_uom),
         schema_version="canonical-v1",
         product=ProductState(
             barcode="101024011793",
