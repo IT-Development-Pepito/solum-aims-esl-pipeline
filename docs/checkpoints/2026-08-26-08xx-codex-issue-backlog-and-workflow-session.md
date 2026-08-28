@@ -1,0 +1,8 @@
+- **Timestamp / owner:** 2026-08-26 08:xx +08:00; Codex issue-backlog and workflow session.
+- **Issue:** GitHub #33, `[docs] make issue-led develop integration workflow explicit`, assigned to `it20pepito`. GitHub #1 is closed: its durable-state implementation merged through PR #2 and CI recovery through PR #3.
+- **Git state:** `codex/33-issue-led-develop-workflow` worktree, created from local and remote `develop` at `54107c9fb1a52f9f3d01d66f471e9103f8f7002f`; documentation change is in progress and uncommitted.
+- **Scope:** Created five assigned parent epics (#5–#9) and 23 detailed child issues (#10–#32). They cover every functional requirement, FR-001 through FR-030; #23, #24, and #30–#32 remain explicitly blocked pending their documented external contracts. Issue #33 makes issue-led development, meaningful `develop`-based branches, commit/push, `develop` merge, and local fast-forward pull explicit.
+- **Evidence:** Compared the unique `FR-###` identifiers from `docs/SPECIFICATION.md` with the GitHub epic/child bodies: all 30 identifiers are covered. Baseline verification in this worktree using the existing root Python 3.12 virtual environment: `python -m pytest -q` → 37 passed, 1 skipped.
+- **Configuration:** No configuration value was read or changed. `ESL_TEST_DATABASE_URL` remains external to source control.
+- **External state:** Created/edited GitHub issues and labels only; created a local issue worktree. No production, database, Jenkins, Hop, AIMS, or ESL system was changed.
+- **Risks / next action:** `develop` still lacks required-check enforcement. Complete #33 through a PR to `develop`, pull the resulting remote `develop` locally, then select the highest-priority unblocked child issue for implementation.

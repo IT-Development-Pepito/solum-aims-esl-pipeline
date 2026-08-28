@@ -1,0 +1,8 @@
+- **Timestamp / owner:** 2026-08-26 08:14 +08:00; Codex Task 3 merge-recovery session.
+- **Issue:** GitHub #1, `Task 3: add durable PostgreSQL workflow state`, closed by merged PR #2; PR #3 delivered its CI recovery fix.
+- **Git state:** remote and root local `develop` are synchronized at `a44d32c7176450e72cf1083137ca703fe666eee2`. PR #2 merged Task 3; PR #3 merged the CI fixture fix. This documentation-only branch is uncommitted pending review.
+- **Scope:** FR-017 durable state is merged into `develop`. The integration fixture now skips only when `ESL_TEST_DATABASE_URL` is absent, while the dedicated local PostgreSQL run still proves exclusive store-scope ownership. No scheduler, CSV adapter, AIMS, SQL Server, or production behavior was added.
+- **Evidence:** PR #2 initially failed CI because no database URL is available in GitHub Actions. PR #3 GitHub Actions checks passed: Python test/lint/type checks and frontend typecheck/test/build. Local CI-equivalent Python verification recorded 37 passed/1 skipped; local PostgreSQL integration recorded 1 passed.
+- **Configuration:** `ESL_TEST_DATABASE_URL` remains external to source control and is required only for the dedicated PostgreSQL integration run. CI intentionally receives no database URL and skips that integration test.
+- **External state:** remote `develop` was created from `origin/main`; PRs #2 and #3 merged automatically into it, and the root local checkout was fast-forwarded after each merge. No production system was changed.
+- **Risks / next action:** `develop` does not yet enforce required GitHub checks, so PR #2 merged before its initial CI failure completed. Obtain repository-owner approval to protect `develop` with the `verify` check before the next feature PR.
