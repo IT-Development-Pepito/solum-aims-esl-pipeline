@@ -20,6 +20,39 @@ Append a checkpoint at issue start, after every independently testable task, aft
 
 ### Latest handoff checkpoint
 
+- **Timestamp / owner:** 2026-08-28 10:29 +08:00; Codex AD-016 implementation-planning handoff.
+- **Issue:** GitHub #42, [docs] plan authoritative data model implementation, assigned to it20pepito; PR #43 is open against develop with type:docs, area:docs, area:persistence, and priority:p1.
+- **Git state:** Primary plan commit 738d21d on codex/42-plan-authoritative-data-model is pushed to origin; PR #43 is open and CI is running. This checkpoint is the only subsequent local change.
+- **Scope:** Planning is complete. The new authoritative-data-model plan sequences #10, #13, #18, #36, #12, #19, #25/#27, and #21; reserves additive migrations 0002–0008; defines TDD, replay, database-CI, traceability, and review gates; and defers compatibility_delivery to issue #30 after consumer acceptance. No application implementation is authorized in this preparation task.
+- **Evidence:** Commit 738d21d contains only docs/PROGRESS.md and three planning files. Local gates passed: plan structure/placeholder/fence/migration checks; git staged diff check; Ruff; mypy; pytest 37 passed/1 skipped; frontend typecheck; Vitest 1 passed; Vite build. PR #43 initial CI runs were in progress when this checkpoint was written.
+- **Configuration:** No configuration variable or secret value was read or changed.
+- **External state:** Pushed the documentation branch and opened/tagged/assigned PR #43. No PostgreSQL, SQL Server, AIMS, Jenkins, Hop, CSV delivery, device, or production state was read or mutated.
+- **Risks / next action:** Do not implement until PR #43 is reviewed and merged. Retention durations, promotion winner policy, and CSV consumer acceptance remain UNKNOWN / NEEDS-DISCOVERY. Next action is review the plan, merge it if approved, then start only the first selected issue in a separate implementation task.
+
+### Previous handoff checkpoint
+
+- **Timestamp / owner:** 2026-08-28 10:26 +08:00; Codex AD-016 implementation-planning session.
+- **Issue:** GitHub #42, [docs] plan authoritative data model implementation, labels type:docs, area:docs, area:persistence, priority:p1, assigned to it20pepito.
+- **Git state:** codex/42-plan-authoritative-data-model in D:\Documents\Dev\solum-aims-esl-pipeline\.worktrees\issue-42-plan-authoritative-data-model at base 1d1ca8d; the verified documentation set is ready to commit and submit to develop.
+- **Scope:** Added the focused AD-016 implementation plan with eight issue-bounded TDD tasks, immutable additive revisions 0002–0008, exact files/interfaces, replay/CI/traceability gates, and explicit deferral of compatibility_delivery. Added dated supersession/sequencing notices to the foundation and CSV plans. Application code and database/external-system changes remain out of scope.
+- **Evidence:** Plan structure check: exact header, 8 uniquely ordered task headings, 43 checkbox steps, 68 balanced code fences, revisions 0002–0008 present, no unresolved placeholder markers, and final newline present. Python 3.12.7: Ruff passed; mypy passed for 7 source files; pytest produced 37 passed/1 skipped. Node 22.23.2/npm 12.0.2: npm ci reported zero vulnerabilities; frontend typecheck passed; Vitest produced 1 passed; Vite production build passed.
+- **Configuration:** No configuration variable or secret value was read or changed. Verification used the existing root .venv only; ESL_TEST_DATABASE_URL was not required or accessed.
+- **External state:** Created/assigned GitHub issue #42 earlier in this session. No PostgreSQL, SQL Server, AIMS, Jenkins, Hop, CSV delivery, device, or production state was read or mutated.
+- **Risks / next action:** Retention durations, promotion winner policy, and CSV consumer acceptance remain UNKNOWN / NEEDS-DISCOVERY and are deliberately blocked in the plan. Commit and push the documentation, open a PR to develop, and obtain plan review before any implementation task starts.
+
+### Previous handoff checkpoint
+
+- **Timestamp / owner:** 2026-08-28 10:06 +08:00; Codex AD-016 implementation-planning session.
+- **Issue:** GitHub #42, [docs] plan authoritative data model implementation, labels type:docs, area:docs, area:persistence, priority:p1, assigned to it20pepito.
+- **Git state:** codex/42-plan-authoritative-data-model in D:\Documents\Dev\solum-aims-esl-pipeline\.worktrees\issue-42-plan-authoritative-data-model, created from synchronized develop at merge commit 1d1ca8d; plan and checkpoint are uncommitted.
+- **Scope:** Planning only for AD-016 and the authoritative data model in SYSTEM_ARCHITECTURE.md section 5. The plan must define additive migration order, exact files/interfaces, TDD evidence, issue boundaries, and supersession of pre-AD-016 plan portions. Application code and database/external-system changes are out of scope.
+- **Evidence:** PR #41 merged issue #40 into develop as 1d1ca8d; local and remote develop match. Post-merge verification: documentation mapping covers all 42 legacy tb_ESL columns; Ruff and mypy passed; Python tests produced 37 passed/1 skipped; frontend typecheck passed; Vitest produced 1 passed; Vite production build passed.
+- **Configuration:** No configuration variable or secret value was read or changed.
+- **External state:** Merged approved PR #41 and created/assigned GitHub issue #42 plus its local plan worktree. No PostgreSQL, SQL Server, AIMS, Jenkins, Hop, CSV delivery, device, or production state was read or mutated.
+- **Risks / next action:** Exact retention durations and unresolved promotion/consumer policies remain discovery gates. Write and self-review the focused implementation plan without encoding those unknowns, then submit it through a PR to develop for review.
+
+### Previous handoff checkpoint
+
 - **Timestamp / owner:** 2026-08-28 09:51 +08:00; Codex authoritative-data-model documentation session.
 - **Issue:** GitHub #40, [docs] define authoritative application data model, labels type:docs, area:docs, area:persistence, priority:p1, assigned to it20pepito.
 - **Git state:** codex/40-authoritative-data-model in D:\Documents\Dev\solum-aims-esl-pipeline\.worktrees\issue-40-authoritative-data-model, branched from synchronized local/remote develop at bb813bb; the primary verified data-model change is commit 91a0d98 and the PR is pending.
@@ -75,6 +108,7 @@ Append a checkpoint at issue start, after every independently testable task, aft
 
 # Completed
 
+- Approved authoritative data model merged through PR #41 at 1d1ca8d; root develop is synchronized and post-merge verification passed.
 - Inspected all supplied current-system evidence under `docs/sql-server/` and `docs/hop-jenkins-pipeline/`.
 - Established the approved target direction: one modular service with durable execution state, rather than a microservice platform or another ETL script.
 - Documented a temporary read-only AIMS PostgreSQL compatibility adapter for the first cutover; vendor-supported APIs remain the preferred long-term boundary.
@@ -85,7 +119,7 @@ Append a checkpoint at issue start, after every independently testable task, aft
 
 # In Progress
 
-- GitHub #40 documents the approved authoritative hybrid relational/versioned-JSONB data model and documentation-first change contract; schema/application implementation is explicitly out of scope.
+- GitHub #42 is producing the focused AD-016 implementation plan; no application or database implementation is authorized in this issue.
 - BR-005 promotion precedence is on hold pending POS/merchandising decision.
 - The GitHub requirement backlog is ready: parent epics #5–#9 and assigned child issues #10–#32. Implement only a selected, unblocked child issue at a time through the issue-led `develop` workflow.
 - Promotion-rule child issues #36 and #37 are ready under epic #5; formal winner priority, same-economic campaign terms, non-CLR conversion, and final weekday policy remain unresolved.

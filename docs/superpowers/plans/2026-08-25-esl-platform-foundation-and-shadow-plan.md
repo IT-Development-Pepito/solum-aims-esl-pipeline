@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **Supersession notice (2026-08-28):** Tasks 1–3 remain completed historical evidence. The AD-016 implementation sequence in `docs/superpowers/plans/2026-08-28-authoritative-data-model-implementation-plan.md` supersedes Task 4's domain-model contract, Task 6's persistence/reconciliation clauses, and Task 7's data-model/query clauses. Adapter, orchestration, runtime, UI, staging, and deployment scope remains active.
+
 **Goal:** Build the internal Python web application foundation that safely observes ESL source/AIMS state, persists durable workflow evidence, and executes shadow workflows without external side effects.
 
 **Architecture:** A React + TypeScript + Vite + Tailwind browser UI calls a FastAPI internal API; the CLI shares FastAPI's application layer rather than the browser interface. Google Stitch exports are versioned visual/source handoffs converted into reviewed React components, never treated as deployable backend or data-access code. PostgreSQL owns schedules, execution state, scope leases, per-record outcomes, reconciliation, and queryable structured event logs. SQL Server and AIMS stay behind adapters; shadow mode uses read-only access and a dry-run page-action adapter.
