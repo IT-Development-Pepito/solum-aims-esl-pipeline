@@ -67,7 +67,7 @@ This procedure applies whenever business behavior, a persistent entity, a field 
 2. Update SPECIFICATION.md first when business logic, processing behavior, evidence classification, or acceptance criteria change. Do not invent a rule to satisfy an implementation.
 3. Update the authoritative data-model section in SYSTEM_ARCHITECTURE.md, including ownership, entity fields, keys, invariants, lifecycle, retention, compatibility, and migration impact.
 4. Obtain documentation review before creating or changing application models or database schema.
-5. Add a new Alembic migration. Never edit a migration that has already been applied in any shared environment.
+5. Add a new Alembic migration. Never edit a migration that has already been applied in any shared environment. Set `down_revision` to the migration graph's current head and keep the graph at exactly one head: when another issue merged a migration first, rebase your revision onto the new head rather than leaving both branched from a shared parent. Check the head before authoring a revision with `python -m alembic heads`, which reads the migration files and needs no database. `tests/unit/persistence/test_migration_graph.py` enforces the single head in CI.
 6. Update the affected SQLAlchemy persistence, domain/Pydantic, FastAPI, and exposed TypeScript models. Keep transport models separate from domain and persistence models.
 7. Add requirement/rule-traceable tests, including prior-schema migration coverage and contract-drift checks where applicable.
 8. Update PROGRESS.md with the issue, branch/worktree, migration state, exact commands/results, configuration variable names without values, external effects, risks, and next action.
