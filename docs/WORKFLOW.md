@@ -51,8 +51,9 @@ This workflow applies to every GitHub issue and is usable by Codex, Claude, or a
 3. Apply the same type, area, and priority labels as the issue; assign the PR to the current authenticated account and request the appropriate review.
 4. A PR must link the issue, name requirement/rule IDs, include commands and results, state migration/configuration/side-effect impact, and identify rollback/recovery where relevant.
 5. After the applicable review and required checks pass, enable auto-merge to `develop` (or complete the approved merge if auto-merge is unavailable). When branch protection is not configured, the merging owner must first verify the visible successful review/check evidence. Direct feature-to-`main` merges are not permitted.
-6. After GitHub records the merge commit, update the local integration checkout immediately: `git switch develop`, then `git pull --ff-only origin develop`. Confirm the local and remote `develop` SHAs match.
-7. Delete the issue worktree only after the branch is merged, local `develop` is updated, and the `PROGRESS.md` checkpoint records the merge commit and next step.
+6. After the PR is merged, ensure that any dependent issues are closed or epics are updated with the merge information and next steps.
+7. After GitHub records the merge commit, update the local integration checkout immediately: `git switch develop`, then `git pull --ff-only origin develop`. Confirm the local and remote `develop` SHAs match.
+8. Delete the issue worktree only after the branch is merged, local `develop` is updated, and the `PROGRESS.md` checkpoint records the merge commit and next step.
 
 ### Cross-agent handoff rule
 
@@ -76,14 +77,14 @@ Emergency fixes follow the same contract: reconcile the documents in the same PR
 
 ## Operational concepts
 
-| Term | Meaning |
-| --- | --- |
-| Execution ID | Immutable identifier for one workflow run; included in logs, metrics, audit, and reconciliation. |
-| Scope | Workflow, store(s), source window, and configuration/rule version owned by a run. |
-| Checkpoint | Durable progress marker from which work can resume/reconcile. |
-| Idempotency key | Stable logical action identity used to prevent duplicate external effect. |
-| Reconciliation | Comparison of source/eligible/rejected/submitted/acknowledged/unresolved counts and records. |
-| Compatibility read | Temporary read-only query to AIMS PostgreSQL; not an AIMS mutation mechanism. |
+| Term               | Meaning                                                                                          |
+| ------------------ | ------------------------------------------------------------------------------------------------ |
+| Execution ID       | Immutable identifier for one workflow run; included in logs, metrics, audit, and reconciliation. |
+| Scope              | Workflow, store(s), source window, and configuration/rule version owned by a run.                |
+| Checkpoint         | Durable progress marker from which work can resume/reconcile.                                    |
+| Idempotency key    | Stable logical action identity used to prevent duplicate external effect.                        |
+| Reconciliation     | Comparison of source/eligible/rejected/submitted/acknowledged/unresolved counts and records.     |
+| Compatibility read | Temporary read-only query to AIMS PostgreSQL; not an AIMS mutation mechanism.                    |
 
 ## Standard procedures
 
@@ -146,23 +147,23 @@ The report must show, at minimum: extracted, valid, rejected, ineligible, eligib
 
 Transformation balance is always:
 
-~~~text
+```text
 extracted = rejected + valid
 valid = ineligible + eligible
-~~~
+```
 
 A terminal active execution balances as:
 
-~~~text
+```text
 eligible = unchanged + skipped_idempotent + acknowledged
          + rejected_by_aims + failed + unresolved
-~~~
+```
 
 A terminal shadow execution balances as:
 
-~~~text
+```text
 eligible = unchanged + skipped_idempotent + intended + unresolved
-~~~
+```
 
 Submitted is an in-flight observation, not a terminal category. A submitted action without a confirmed outcome becomes OUTCOME_UNKNOWN and is counted as unresolved before terminal reconciliation. Any non-zero unresolved count blocks automatic completion for the affected scope unless an approved policy explicitly permits it.
 
@@ -184,17 +185,17 @@ Submitted is an in-flight observation, not a terminal category. A submitted acti
 
 ## Common failure scenarios
 
-| Scenario | First response | Safe recovery |
-| --- | --- | --- |
-| SQL Server unavailable | Stop new affected scope; inspect dependency health. | Restore connectivity; retry from saved window/checkpoint. |
-| AIMS API timeout | Inspect action ledger/idempotency key. | Reconcile before retry; escalate vendor/API issues. |
-| AIMS rejection | Capture response and rule/config version. | Correct data/config/rule only through approved process; replay bounded scope. |
-| AIMS compatibility query fails | Mark dependency degraded. | Do not substitute direct DB writes; use approved fallback or wait/escalate. |
-| Malformed input | Quarantine with reason. | Correct source/validation issue; replay only rejected records/window. |
-| Promotion ambiguity / unsupported UOM | Preserve candidate and calculation evidence; do not treat it as a transport failure. | Escalate to merchandising/POS or correct approved source; replay only after the rule/data decision is recorded. |
-| Process/server restart | Inspect recovery report. | Resume/reconcile durable runs; do not launch duplicate manual runs. |
-| CSV delivery uncertainty | Treat missing, rejected, malformed, mismatched, or timed-out acknowledgement as unresolved, not successful. | Inspect the durable delivery/event record and matching automatic acknowledgement; never infer completion from file presence or blindly resend. CSV files are never authoritative state or comparison evidence. |
-| Disk/telemetry failure | Protect audit durability, alert operations. | Restore capacity/telemetry then reconcile affected run. |
+| Scenario                              | First response                                                                                              | Safe recovery                                                                                                                                                                                                  |
+| ------------------------------------- | ----------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| SQL Server unavailable                | Stop new affected scope; inspect dependency health.                                                         | Restore connectivity; retry from saved window/checkpoint.                                                                                                                                                      |
+| AIMS API timeout                      | Inspect action ledger/idempotency key.                                                                      | Reconcile before retry; escalate vendor/API issues.                                                                                                                                                            |
+| AIMS rejection                        | Capture response and rule/config version.                                                                   | Correct data/config/rule only through approved process; replay bounded scope.                                                                                                                                  |
+| AIMS compatibility query fails        | Mark dependency degraded.                                                                                   | Do not substitute direct DB writes; use approved fallback or wait/escalate.                                                                                                                                    |
+| Malformed input                       | Quarantine with reason.                                                                                     | Correct source/validation issue; replay only rejected records/window.                                                                                                                                          |
+| Promotion ambiguity / unsupported UOM | Preserve candidate and calculation evidence; do not treat it as a transport failure.                        | Escalate to merchandising/POS or correct approved source; replay only after the rule/data decision is recorded.                                                                                                |
+| Process/server restart                | Inspect recovery report.                                                                                    | Resume/reconcile durable runs; do not launch duplicate manual runs.                                                                                                                                            |
+| CSV delivery uncertainty              | Treat missing, rejected, malformed, mismatched, or timed-out acknowledgement as unresolved, not successful. | Inspect the durable delivery/event record and matching automatic acknowledgement; never infer completion from file presence or blindly resend. CSV files are never authoritative state or comparison evidence. |
+| Disk/telemetry failure                | Protect audit durability, alert operations.                                                                 | Restore capacity/telemetry then reconcile affected run.                                                                                                                                                        |
 
 ## Escalation
 
