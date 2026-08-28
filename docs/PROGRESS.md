@@ -20,6 +20,17 @@ Append a checkpoint at issue start, after every independently testable task, aft
 
 ### Latest handoff checkpoint
 
+- **Timestamp / owner:** 2026-08-28 18:05 +08:00; Claude issue #49 implementation.
+- **Issue:** GitHub #49, [ci] enforce a single Alembic head, assigned to it20pepito; labels type:chore, area:ci, area:persistence, and priority:p1. Raised from a workflow review of Codex/Claude overlap risk.
+- **Git state:** claude/49-single-alembic-head in D:\Documents\Dev\solum-aims-esl-pipeline\.worktrees\issue-49-single-alembic-head, branched from origin/develop at 707892c059d01569d385c282a4e88c30ecec44d3.
+- **Scope:** Guard the migration graph against a fork caused by two agents branching a revision from the same parent. Added tests/unit/persistence/test_migration_graph.py and stated the rule in the WORKFLOW.md documentation-first data-model procedure step 5. Implemented as a test rather than a bespoke CI step because the single head is a codebase invariant, so it is linted, type-checked, and already executed by the existing pytest job. Non-goals: no PostgreSQL service in CI, no integration-test execution (#21), no new or edited migration.
+- **Evidence:** Python 3.12.7. Verified alembic heads resolves from migration files with no database URL. Acceptance evidence captured by adding a real second head, 0003_tmp_forked_head branched from 0001_operational_state: the guard failed with "the migration graph has more than one head ... 0002_configuration_and_snapshots, 0003_tmp_forked_head" and alembic heads independently reported both. After removing the temporary revision the suite returned to 2 passed. Full gate results recorded in the PR.
+- **Configuration:** No configuration variable or secret value was read or changed. No database was contacted; the guard needs none.
+- **External state:** Created GitHub issues #48 through #51 from the workflow review. No PostgreSQL, SQL Server, AIMS, Jenkins, Hop, CSV delivery, device, or production state was read or mutated.
+- **Risks / next action:** The guard detects a fork but does not resolve it; the authoring agent must still rebase. Sibling issues #48, #50, and #51 remain open. Next action: complete the gates, open the PR closing #49, and set its Development link manually because closing keywords are inert on develop-targeted PRs.
+
+### Previous handoff checkpoint
+
 - **Timestamp / owner:** 2026-08-28 17:20 +08:00; Claude issue #46 documentation task.
 - **Issue:** GitHub #46, [docs] allow agent-identifying issue branch prefixes, assigned to it20pepito; labels type:docs, area:docs, and priority:p3.
 - **Git state:** claude/46-agent-branch-prefixes in D:\Documents\Dev\solum-aims-esl-pipeline\.claude\worktrees\solum-aims-esl-onboarding-d111d9, branched from origin/develop at 4ce8eba1f86c1cb7b57f95e4d80924d7bc7a21bb. Local develop still points at 29db501 because it is checked out in the root worktree; the WORKFLOW.md step 4.7 fast-forward must be run there and is not safe to force from a sibling worktree.
