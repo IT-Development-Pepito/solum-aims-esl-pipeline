@@ -20,7 +20,7 @@ Append a checkpoint at issue start, after every independently testable task, aft
 
 ### Latest handoff checkpoint
 
-- **Timestamp / owner:** 2026-08-28 14:31 +08:00; Codex issue #10 final re-review correction checkpoint.
+- **Timestamp / owner:** 2026-08-28 14:29:00 +08:00; Codex issue #10 final re-review correction checkpoint.
 - **Issue:** GitHub #10, [domain] define deterministic canonical records and rule boundaries, assigned to it20pepito; labels type:feature, area:domain, and priority:p1.
 - **Git state:** At this checkpoint, codex/10-canonical-records in D:\Documents\Dev\solum-aims-esl-pipeline\.worktrees\issue-10-canonical-records is at clean committed HEAD 136a72410d2015cdce7f727e5bf2d65e57c106ab; the only subsequent uncommitted files are this checkpoint and the final-review test correction. Earlier Task 1 commits are 8785562, bf5fb60, 52a4be4, and 2b5ef2f.
 - **Scope:** Completed approved AD-016 Task 1 for FR-004, FR-005, and BR-018: immutable pure canonical record contracts, deterministic canonical payload/hash, and sorted path-level diffs. Canonical key is exactly store_code + item_code + selling_uom; KGS source and /100GR display prices remain distinct. No persistence, migration, adapter, scheduler, UI/API, promotion selection, conversion, weekday, or rounding policy was added; alembic/versions/0001_operational_state.py remains unchanged.
