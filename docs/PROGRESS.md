@@ -20,6 +20,17 @@ Append a checkpoint at issue start, after every independently testable task, aft
 
 ### Latest handoff checkpoint
 
+- **Timestamp / owner:** 2026-08-28 17:20 +08:00; Claude issue #46 documentation task.
+- **Issue:** GitHub #46, [docs] allow agent-identifying issue branch prefixes, assigned to it20pepito; labels type:docs, area:docs, and priority:p3.
+- **Git state:** claude/46-agent-branch-prefixes in D:\Documents\Dev\solum-aims-esl-pipeline\.claude\worktrees\solum-aims-esl-onboarding-d111d9, branched from origin/develop at 4ce8eba1f86c1cb7b57f95e4d80924d7bc7a21bb. Local develop still points at 29db501 because it is checked out in the root worktree; the WORKFLOW.md step 4.7 fast-forward must be run there and is not safe to force from a sibling worktree.
+- **Scope:** Documentation only. Amended WORKFLOW.md step 2.3 to allow the codex/, claude/, and issue/ agent-identifying prefixes while keeping the meaningful-name and current-develop requirements, and corrected step 2.4 so its worktree example uses the same branch-name form. Also recorded the #13 merge outcome below, following the existing project practice of recording a merge in the next issue's checkpoint. No application code, schema, migration, or workflow gate changed.
+- **Evidence:** Recorded in this issue's PR after the standard gates run on this branch.
+- **Configuration:** No configuration variable or secret value was read or changed.
+- **External state:** None beyond GitHub issue/PR activity. No PostgreSQL, SQL Server, AIMS, Jenkins, Hop, CSV delivery, device, or production state was read or mutated.
+- **Risks / next action:** The prefix is a readability convention only and grants no area ownership, so lane conflicts still need explicit coordination between agents. Next action: open the #46 PR to develop, then await an explicit assignment before starting AD-016 Task 3 (#18).
+
+### Previous handoff checkpoint
+
 - **Timestamp / owner:** 2026-08-28 16:40 +08:00; Claude issue #13 implementation complete, pre-PR.
 - **Issue:** GitHub #13, [domain] support configured multi-store canonical diff and hash processing, assigned to it20pepito; labels type:feature, area:domain, area:ingestion, and priority:p1. The issue body was corrected to record that the approved AD-016 plan sequences #13 as Task 2 ahead of #36 at Task 4.
 - **Git state:** claude/13-configuration-snapshots-differences in D:\Documents\Dev\solum-aims-esl-pipeline\.claude\worktrees\solum-aims-esl-onboarding-d111d9, branched from origin/develop at 29db501b0b480c1ddf41a34b0e0238656a0e0db1. All issue scope is staged for one commit; no unrelated file is modified. The gitignored worktree .env and .venv are untracked.
@@ -147,6 +158,7 @@ Append a checkpoint at issue start, after every independently testable task, aft
 
 # Completed
 
+- AD-016 Task 2 merged through PR #45 at 4ce8eba, closing #13: configuration, canonical snapshot, and difference persistence with additive migration 0002_configuration_and_snapshots. GitHub Actions verified the branch (Ruff, mypy for 16 source files, pytest 55 passed / 12 skipped without a configured test database, frontend typecheck, Vitest, and Vite build). The same suite reports 67 passed with no skip against the dedicated non-production database, which now rests at 0002.
 - Approved authoritative data model merged through PR #41 at 1d1ca8d; root develop is synchronized and post-merge verification passed.
 - Inspected all supplied current-system evidence under `docs/sql-server/` and `docs/hop-jenkins-pipeline/`.
 - Established the approved target direction: one modular service with durable execution state, rather than a microservice platform or another ETL script.

@@ -30,8 +30,8 @@ This workflow applies to every GitHub issue and is usable by Codex, Claude, or a
 
 1. Use remote `develop` as the integration branch. Bootstrap it exactly once from the current remote `main` when `origin/develop` does not exist: `git fetch origin --prune`, then `git push origin origin/main:refs/heads/develop`.
 2. Start every issue from current `develop`: `git switch develop`, then `git pull --ff-only origin develop`.
-3. Create a meaningful branch from that exact `develop` HEAD with the `codex/` prefix. Its name must identify the issue or epic and outcome, for example `codex/42-durable-scope-lease` or `codex/epic-6-workflow-recovery`.
-4. Create a sibling worktree inside the ignored directory: `git worktree add .worktrees/issue-42-durable-scope-lease -b codex/issue-42-durable-scope-lease develop`.
+3. Create a meaningful branch from that exact `develop` HEAD using an agent-identifying prefix: `codex/` for Codex, `claude/` for Claude, or `issue/` for a human developer. The rest of the name must identify the issue or epic and the outcome, for example `codex/42-durable-scope-lease`, `claude/13-configuration-snapshots-differences`, or `codex/epic-6-workflow-recovery`. The prefix keeps concurrent agents' branches distinguishable in the branch list, in `docs/PROGRESS.md` checkpoints, and during pull-request review; it does not grant an agent exclusive ownership of an area.
+4. Create a sibling worktree inside the ignored directory, naming the branch exactly as in the previous step: `git worktree add .worktrees/issue-42-durable-scope-lease -b codex/42-durable-scope-lease develop`.
 5. Work only from that issue worktree. Never mix two issues in one worktree or branch.
 6. GitHub labels are the required per-issue tags. Create an annotated Git tag only for an approved release or tested milestone, using `v<major>.<minor>.<patch>` or `test-<YYYYMMDD>-issue-<number>`; do not create a Git tag for an unreviewed issue branch.
 
