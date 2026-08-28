@@ -12,7 +12,7 @@ from esl_service.domain.canonical import (
     PromotionStateData,
     Provenance,
 )
-from esl_service.domain.diff import FieldDifference, diff_records
+from esl_service.domain.diff import FieldDifference, diff_payloads, diff_records
 from esl_service.domain.serialization import canonical_hash, canonical_payload
 
 __all__ = [
@@ -29,5 +29,6 @@ __all__ = [
     "Provenance",
     "canonical_hash",
     "canonical_payload",
+    "diff_payloads",
     "diff_records",
 ]
