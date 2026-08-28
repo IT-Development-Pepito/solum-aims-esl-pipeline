@@ -3,7 +3,7 @@
 import hashlib
 import json
 from dataclasses import fields, is_dataclass
-from datetime import date, datetime, time
+from datetime import UTC, date, datetime, time
 from decimal import Decimal
 from enum import Enum
 
@@ -29,7 +29,11 @@ def canonical_hash(value: object) -> str:
 def _json_value(value: object) -> JSONValue:
     if isinstance(value, Decimal):
         return format(value.normalize(), "f")
-    if isinstance(value, (date, datetime, time)):
+    if isinstance(value, datetime):
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("naive datetime is not a canonical timestamp")
+        return value.astimezone(UTC).isoformat()
+    if isinstance(value, (date, time)):
         return value.isoformat()
     if isinstance(value, Enum):
         return str(value.value)

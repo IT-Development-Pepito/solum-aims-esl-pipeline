@@ -1,7 +1,7 @@
 """FR-004/FR-005/BR-018 tests for immutable canonical ESL records."""
 
 from dataclasses import FrozenInstanceError, replace
-from datetime import UTC, date, datetime, time
+from datetime import UTC, date, datetime, time, timedelta, timezone
 from decimal import Decimal
 
 import pytest
@@ -40,7 +40,7 @@ def test_fr_004_serializes_decimals_dates_enums_and_hashes_deterministically() -
     assert payload["pricing"]["source_regular_price"] == "50000"
     assert payload["inventory"]["stock_on_hand"] == "15.5"
     assert payload["expiry"]["early_expiry_date"] == "2026-09-15"
-    assert payload["provenance"]["source_updated_at"] == "2026-08-28T09:59:00+08:00"
+    assert payload["provenance"]["source_updated_at"] == "2026-08-28T01:59:00+00:00"
     assert payload["pricing"]["display_price_basis"] == "100GR"
     assert canonical_hash(record) == canonical_hash(replace(record, inventory=replace(record.inventory, stock_on_hand=Decimal("15.5000"))))
 
@@ -81,3 +81,20 @@ def test_fr_004_encodes_iso_8601_temporal_values() -> None:
     assert canonical_payload(
         datetime(2026, 8, 28, 9, 30, 15, tzinfo=UTC)
     ) == "2026-08-28T09:30:15+00:00"
+
+def test_fr_004_normalizes_aware_datetimes_to_utc_for_payloads_and_hashes() -> None:
+    """FR-004 treats equivalent aware instants as one canonical UTC value."""
+    offset_value = datetime(
+        2026, 8, 28, 17, 30, 15, tzinfo=timezone(timedelta(hours=8))
+    )
+    utc_value = datetime(2026, 8, 28, 9, 30, 15, tzinfo=UTC)
+
+    assert canonical_payload(offset_value) == "2026-08-28T09:30:15+00:00"
+    assert canonical_payload(offset_value) == canonical_payload(utc_value)
+    assert canonical_hash(offset_value) == canonical_hash(utc_value)
+
+
+def test_fr_004_rejects_naive_datetimes_from_canonical_serialization() -> None:
+    """FR-004 requires timestamp values to identify an unambiguous UTC instant."""
+    with pytest.raises(ValueError, match="naive datetime"):
+        canonical_payload(datetime(2026, 8, 28, 9, 30, 15))  # noqa: DTZ001
