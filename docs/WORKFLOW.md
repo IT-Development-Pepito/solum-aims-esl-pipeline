@@ -30,19 +30,19 @@ This workflow applies to every GitHub issue and is usable by Codex, Claude, or a
 
 1. Use remote `develop` as the integration branch. Bootstrap it exactly once from the current remote `main` when `origin/develop` does not exist: `git fetch origin --prune`, then `git push origin origin/main:refs/heads/develop`.
 2. Start every issue from current `develop`: `git switch develop`, then `git pull --ff-only origin develop`.
-3. Create a meaningful branch from that exact `develop` HEAD using an agent-identifying prefix: `codex/` for Codex, `claude/` for Claude, or `issue/` for a human developer. The rest of the name must identify the issue or epic and the outcome, for example `codex/42-durable-scope-lease`, `claude/13-configuration-snapshots-differences`, or `codex/epic-6-workflow-recovery`. The prefix keeps concurrent agents' branches distinguishable in the branch list, in `docs/PROGRESS.md` checkpoints, and during pull-request review; it does not grant an agent exclusive ownership of an area.
+3. Create a meaningful branch from that exact `develop` HEAD using an agent-identifying prefix: `codex/` for Codex, `claude/` for Claude, or `issue/` for a human developer. The rest of the name must identify the issue or epic and the outcome, for example `codex/42-durable-scope-lease`, `claude/13-configuration-snapshots-differences`, or `codex/epic-6-workflow-recovery`. The prefix keeps concurrent agents' branches distinguishable in the branch list, in `docs/checkpoints/`, and during pull-request review; it does not grant an agent exclusive ownership of an area.
 4. Create a sibling worktree inside the ignored directory, naming the branch exactly as in the previous step: `git worktree add .worktrees/issue-42-durable-scope-lease -b codex/42-durable-scope-lease develop`.
 5. Work only from that issue worktree. Never mix two issues in one worktree or branch.
 6. GitHub labels are the required per-issue tags. Create an annotated Git tag only for an approved release or tested milestone, using `v<major>.<minor>.<patch>` or `test-<YYYYMMDD>-issue-<number>`; do not create a Git tag for an unreviewed issue branch.
 
 ### 3. Implement, test, and checkpoint
 
-1. Read `AGENTS.md`, `docs/PROGRESS.md`, and the issue before changing files.
+1. Read `AGENTS.md`, `docs/PROGRESS.md`, the most recent files in `docs/checkpoints/` (`ls docs/checkpoints | tail -3`), and the issue before changing files.
 2. Write or update the focused failing test first for production behavior. Run it and capture the expected failure before implementing the minimum change.
 3. Run focused tests after each behavior change, then the relevant lint, type, build, and integration checks before committing.
 4. Commit the completed, verified issue scope with a meaningful Conventional Commit-style message, for example `feat(persistence): add scope lease (#42)`, `fix(config): reject broad service SID (#42)`, or `docs(workflow): add issue handoff rules (#42)`.
 5. Push the implementation branch to the remote repository before opening its pull request: `git push -u origin <branch>`.
-6. Update the issue and `docs/PROGRESS.md` checkpoint after each independently testable task, review result, blocker, migration, configuration contract, or external side effect.
+6. Update the issue and add a new file in `docs/checkpoints/` after each independently testable task, review result, blocker, migration, configuration contract, or external side effect. Never edit an existing checkpoint; add a newer one instead.
 
 ### 4. Open and review the pull request
 
@@ -53,11 +53,13 @@ This workflow applies to every GitHub issue and is usable by Codex, Claude, or a
 5. After the applicable review and required checks pass, enable auto-merge to `develop` (or complete the approved merge if auto-merge is unavailable). When branch protection is not configured, the merging owner must first verify the visible successful review/check evidence. Direct feature-to-`main` merges are not permitted.
 6. After the PR is merged, ensure that any dependent issues are closed or epics are updated with the merge information and next steps.
 7. After GitHub records the merge commit, update the local integration checkout immediately: `git switch develop`, then `git pull --ff-only origin develop`. Confirm the local and remote `develop` SHAs match.
-8. Delete the issue worktree only after the branch is merged, local `develop` is updated, and the `PROGRESS.md` checkpoint records the merge commit and next step.
+8. Delete the issue worktree only after the branch is merged, local `develop` is updated, and a checkpoint in `docs/checkpoints/` records the merge commit and next step.
 
 ### Cross-agent handoff rule
 
-Before changing chats or agents, add a checkpoint to `docs/PROGRESS.md` containing: issue number/title, branch, commit SHA, exact completed scope, commands and results, uncommitted state, configuration variable names without values, external systems touched, unresolved risks, and the next smallest action. A new agent must read the latest checkpoint before work.
+Before changing chats or agents, add a checkpoint file to `docs/checkpoints/` containing: issue number/title, branch, commit SHA, exact completed scope, commands and results, uncommitted state, configuration variable names without values, external systems touched, unresolved risks, and the next smallest action. A new agent must read the most recent checkpoints before work.
+
+Checkpoints are one file per checkpoint, named `<YYYY-MM-DD>-<HHMM>-<owner-and-scope>.md`, so two agents adding a checkpoint never edit the same lines. Filename order is chronological order, and there is deliberately no index file to conflict over. `docs/PROGRESS.md` keeps the required-field table and the project's phase, decisions, risks, and discovery sections.
 
 ### Documentation-first data-model change procedure
 
@@ -70,7 +72,7 @@ This procedure applies whenever business behavior, a persistent entity, a field 
 5. Add a new Alembic migration. Never edit a migration that has already been applied in any shared environment. Set `down_revision` to the migration graph's current head and keep the graph at exactly one head: when another issue merged a migration first, rebase your revision onto the new head rather than leaving both branched from a shared parent. Check the head before authoring a revision with `python -m alembic heads`, which reads the migration files and needs no database. `tests/unit/persistence/test_migration_graph.py` enforces the single head in CI.
 6. Update the affected SQLAlchemy persistence, domain/Pydantic, FastAPI, and exposed TypeScript models. Keep transport models separate from domain and persistence models.
 7. Add requirement/rule-traceable tests, including prior-schema migration coverage and contract-drift checks where applicable.
-8. Update PROGRESS.md with the issue, branch/worktree, migration state, exact commands/results, configuration variable names without values, external effects, risks, and next action.
+8. Add a checkpoint in `docs/checkpoints/` with the issue, branch/worktree, migration state, exact commands/results, configuration variable names without values, external effects, risks, and next action.
 9. In the PR, verify that documentation, migration, application models, API types, and tests describe the same semantics. A model-changing PR cannot merge while any one of these layers is missing or contradictory.
 
 Emergency fixes follow the same contract: reconcile the documents in the same PR before merge. A documentation-only architecture decision does not authorize an Alembic migration or application implementation; those require their own accepted issue scope.

@@ -1,0 +1,8 @@
+- **Timestamp / owner:** 2026-08-28 10:06 +08:00; Codex AD-016 implementation-planning session.
+- **Issue:** GitHub #42, [docs] plan authoritative data model implementation, labels type:docs, area:docs, area:persistence, priority:p1, assigned to it20pepito.
+- **Git state:** codex/42-plan-authoritative-data-model in D:\Documents\Dev\solum-aims-esl-pipeline\.worktrees\issue-42-plan-authoritative-data-model, created from synchronized develop at merge commit 1d1ca8d; plan and checkpoint are uncommitted.
+- **Scope:** Planning only for AD-016 and the authoritative data model in SYSTEM_ARCHITECTURE.md section 5. The plan must define additive migration order, exact files/interfaces, TDD evidence, issue boundaries, and supersession of pre-AD-016 plan portions. Application code and database/external-system changes are out of scope.
+- **Evidence:** PR #41 merged issue #40 into develop as 1d1ca8d; local and remote develop match. Post-merge verification: documentation mapping covers all 42 legacy tb_ESL columns; Ruff and mypy passed; Python tests produced 37 passed/1 skipped; frontend typecheck passed; Vitest produced 1 passed; Vite production build passed.
+- **Configuration:** No configuration variable or secret value was read or changed.
+- **External state:** Merged approved PR #41 and created/assigned GitHub issue #42 plus its local plan worktree. No PostgreSQL, SQL Server, AIMS, Jenkins, Hop, CSV delivery, device, or production state was read or mutated.
+- **Risks / next action:** Exact retention durations and unresolved promotion/consumer policies remain discovery gates. Write and self-review the focused implementation plan without encoding those unknowns, then submit it through a PR to develop for review.
