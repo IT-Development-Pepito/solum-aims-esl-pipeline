@@ -20,6 +20,17 @@ Append a checkpoint at issue start, after every independently testable task, aft
 
 ### Latest handoff checkpoint
 
+- **Timestamp / owner:** 2026-08-28 10:29 +08:00; Codex AD-016 implementation-planning handoff.
+- **Issue:** GitHub #42, [docs] plan authoritative data model implementation, assigned to it20pepito; PR #43 is open against develop with type:docs, area:docs, area:persistence, and priority:p1.
+- **Git state:** Primary plan commit 738d21d on codex/42-plan-authoritative-data-model is pushed to origin; PR #43 is open and CI is running. This checkpoint is the only subsequent local change.
+- **Scope:** Planning is complete. The new authoritative-data-model plan sequences #10, #13, #18, #36, #12, #19, #25/#27, and #21; reserves additive migrations 0002–0008; defines TDD, replay, database-CI, traceability, and review gates; and defers compatibility_delivery to issue #30 after consumer acceptance. No application implementation is authorized in this preparation task.
+- **Evidence:** Commit 738d21d contains only docs/PROGRESS.md and three planning files. Local gates passed: plan structure/placeholder/fence/migration checks; git staged diff check; Ruff; mypy; pytest 37 passed/1 skipped; frontend typecheck; Vitest 1 passed; Vite build. PR #43 initial CI runs were in progress when this checkpoint was written.
+- **Configuration:** No configuration variable or secret value was read or changed.
+- **External state:** Pushed the documentation branch and opened/tagged/assigned PR #43. No PostgreSQL, SQL Server, AIMS, Jenkins, Hop, CSV delivery, device, or production state was read or mutated.
+- **Risks / next action:** Do not implement until PR #43 is reviewed and merged. Retention durations, promotion winner policy, and CSV consumer acceptance remain UNKNOWN / NEEDS-DISCOVERY. Next action is review the plan, merge it if approved, then start only the first selected issue in a separate implementation task.
+
+### Previous handoff checkpoint
+
 - **Timestamp / owner:** 2026-08-28 10:26 +08:00; Codex AD-016 implementation-planning session.
 - **Issue:** GitHub #42, [docs] plan authoritative data model implementation, labels type:docs, area:docs, area:persistence, priority:p1, assigned to it20pepito.
 - **Git state:** codex/42-plan-authoritative-data-model in D:\Documents\Dev\solum-aims-esl-pipeline\.worktrees\issue-42-plan-authoritative-data-model at base 1d1ca8d; the verified documentation set is ready to commit and submit to develop.
@@ -30,6 +41,7 @@ Append a checkpoint at issue start, after every independently testable task, aft
 - **Risks / next action:** Retention durations, promotion winner policy, and CSV consumer acceptance remain UNKNOWN / NEEDS-DISCOVERY and are deliberately blocked in the plan. Commit and push the documentation, open a PR to develop, and obtain plan review before any implementation task starts.
 
 ### Previous handoff checkpoint
+
 - **Timestamp / owner:** 2026-08-28 10:06 +08:00; Codex AD-016 implementation-planning session.
 - **Issue:** GitHub #42, [docs] plan authoritative data model implementation, labels type:docs, area:docs, area:persistence, priority:p1, assigned to it20pepito.
 - **Git state:** codex/42-plan-authoritative-data-model in D:\Documents\Dev\solum-aims-esl-pipeline\.worktrees\issue-42-plan-authoritative-data-model, created from synchronized develop at merge commit 1d1ca8d; plan and checkpoint are uncommitted.
