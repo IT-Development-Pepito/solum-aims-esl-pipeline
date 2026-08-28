@@ -57,6 +57,23 @@ This workflow applies to every GitHub issue and is usable by Codex, Claude, or a
 ### Cross-agent handoff rule
 
 Before changing chats or agents, add a checkpoint to `docs/PROGRESS.md` containing: issue number/title, branch, commit SHA, exact completed scope, commands and results, uncommitted state, configuration variable names without values, external systems touched, unresolved risks, and the next smallest action. A new agent must read the latest checkpoint before work.
+
+### Documentation-first data-model change procedure
+
+This procedure applies whenever business behavior, a persistent entity, a field meaning, relationship, constraint, lifecycle, retention class, API shape, or application-level data type changes. SYSTEM_ARCHITECTURE.md is the model authority; this guide owns the repeatable development procedure.
+
+1. Identify and cite the affected FR/NFR/BR IDs in the GitHub issue.
+2. Update SPECIFICATION.md first when business logic, processing behavior, evidence classification, or acceptance criteria change. Do not invent a rule to satisfy an implementation.
+3. Update the authoritative data-model section in SYSTEM_ARCHITECTURE.md, including ownership, entity fields, keys, invariants, lifecycle, retention, compatibility, and migration impact.
+4. Obtain documentation review before creating or changing application models or database schema.
+5. Add a new Alembic migration. Never edit a migration that has already been applied in any shared environment.
+6. Update the affected SQLAlchemy persistence, domain/Pydantic, FastAPI, and exposed TypeScript models. Keep transport models separate from domain and persistence models.
+7. Add requirement/rule-traceable tests, including prior-schema migration coverage and contract-drift checks where applicable.
+8. Update PROGRESS.md with the issue, branch/worktree, migration state, exact commands/results, configuration variable names without values, external effects, risks, and next action.
+9. In the PR, verify that documentation, migration, application models, API types, and tests describe the same semantics. A model-changing PR cannot merge while any one of these layers is missing or contradictory.
+
+Emergency fixes follow the same contract: reconcile the documents in the same PR before merge. A documentation-only architecture decision does not authorize an Alembic migration or application implementation; those require their own accepted issue scope.
+
 ## Operational concepts
 
 | Term | Meaning |
@@ -125,11 +142,29 @@ The implementation must reject or explicitly queue an overlapping scope; it must
 
 ### Reconcile a workflow
 
-The report must show, at minimum: extracted, valid, rejected, eligible, skipped-idempotent, submitted, acknowledged, rejected-by-AIMS, failed, and unresolved counts; plus record identifiers for every imbalance. The balancing rule is:
+The report must show, at minimum: extracted, valid, rejected, ineligible, eligible, unchanged, intended, skipped-idempotent, submitted, acknowledged, rejected-by-AIMS, failed, and unresolved counts; plus record identifiers for every imbalance.
 
-`extracted = rejected + valid`; `valid = ineligible + eligible`; `eligible = skipped-idempotent + acknowledged + rejected-by-AIMS + failed + unresolved`.
+Transformation balance is always:
 
-Any non-zero `unresolved` count blocks automatic completion for affected scope unless an approved policy explicitly permits it.
+~~~text
+extracted = rejected + valid
+valid = ineligible + eligible
+~~~
+
+A terminal active execution balances as:
+
+~~~text
+eligible = unchanged + skipped_idempotent + acknowledged
+         + rejected_by_aims + failed + unresolved
+~~~
+
+A terminal shadow execution balances as:
+
+~~~text
+eligible = unchanged + skipped_idempotent + intended + unresolved
+~~~
+
+Submitted is an in-flight observation, not a terminal category. A submitted action without a confirmed outcome becomes OUTCOME_UNKNOWN and is counted as unresolved before terminal reconciliation. Any non-zero unresolved count blocks automatic completion for the affected scope unless an approved policy explicitly permits it.
 
 ### Disable and re-enable scheduling
 
