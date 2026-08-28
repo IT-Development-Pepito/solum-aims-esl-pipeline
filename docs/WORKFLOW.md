@@ -49,11 +49,31 @@ This workflow applies to every GitHub issue and is usable by Codex, Claude, or a
 1. Open a PR from the already-pushed issue branch targeting `develop`, using `.github/pull_request_template.md`.
 2. Use title format `<type>(<area>): <outcome> (#<issue>)`.
 3. Apply the same type, area, and priority labels as the issue; assign the PR to the current authenticated account and request the appropriate review.
-4. A PR must link the issue, name requirement/rule IDs, include commands and results, state migration/configuration/side-effect impact, and identify rollback/recovery where relevant.
-5. After the applicable review and required checks pass, enable auto-merge to `develop` (or complete the approved merge if auto-merge is unavailable). When branch protection is not configured, the merging owner must first verify the visible successful review/check evidence. Direct feature-to-`main` merges are not permitted.
-6. After the PR is merged, ensure that any dependent issues are closed or epics are updated with the merge information and next steps.
-7. After GitHub records the merge commit, update the local integration checkout immediately: `git switch develop`, then `git pull --ff-only origin develop`. Confirm the local and remote `develop` SHAs match.
-8. Delete the issue worktree only after the branch is merged, local `develop` is updated, and a checkpoint in `docs/checkpoints/` records the merge commit and next step.
+4. A PR must link the issue, name requirement/rule IDs, include commands and results, state migration/configuration/side-effect impact, and identify rollback/recovery where relevant. Link the issue in GitHub's **Development** sidebar, not only in the PR body: because issue branches target `develop` while the repository default branch is `main`, a `Closes #<issue>` keyword does **not** create the link and does **not** close the issue on merge. Confirm the link registered:
+
+    ```bash
+    gh api graphql -f query='{repository(owner:"IT-Development-Pepito",name:"solum-aims-esl-pipeline"){pullRequest(number:<pr>){closingIssuesReferences(first:10){nodes{number state}}}}}'
+    ```
+
+    An empty result means only a mention exists. Set the link in the PR's Development sidebar; the GitHub CLI cannot set it.
+5. Before merge, the non-authoring agent records a cross-agent review on the PR. Both agents authenticate as the same GitHub account, so GitHub's approving-review flow is unavailable — an account cannot approve its own pull request. Record the review as a comment review instead:
+
+    ```bash
+    gh pr review <pr> --comment --body "<findings>"
+    ```
+
+    The review must state whether the change stayed inside the issue's accepted scope, whether the recorded evidence supports the claims, what the migration, configuration, and external side-effect impact is, and whether the change overlaps work the reviewing agent has in flight. Recording "no overlap" explicitly is the point: it is the only place the two agents' work is compared before it lands.
+
+6. `develop` is protected and requires the `verify` check to pass before merge. Approving reviews are deliberately not required, because a single account cannot satisfy them. Merge once `verify` is green and the cross-agent review is recorded. Direct feature-to-`main` merges are not permitted. Administrators are not bound by the protection (`enforce_admins` is disabled), so an owner can still merge when a check is genuinely blocked; doing so requires recording the reason on the PR.
+7. After the PR is merged, close the issue manually with the merge commit, since the keyword cannot close it, and update any dependent issues or epics with the merge information and next steps.
+8. After GitHub records the merge commit, update the local integration checkout immediately and automatically. From the root checkout use `git switch develop`, then `git pull --ff-only origin develop`. From an agent worktree `git switch develop` fails, because `develop` is checked out in the root worktree; run it against the root checkout instead, which is safe and refuses rather than rewriting if anything diverged:
+
+    ```bash
+    git -C <repository-root> pull --ff-only origin develop
+    ```
+
+    Confirm the local and remote `develop` SHAs match.
+9. Delete the issue worktree and its branch only after the branch is merged, local `develop` is updated, and a checkpoint in `docs/checkpoints/` records the merge commit and next step. The repository deletes the remote branch automatically on merge.
 
 ### Cross-agent handoff rule
 
