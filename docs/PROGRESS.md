@@ -20,6 +20,23 @@ Append a checkpoint at issue start, after every independently testable task, aft
 
 ### Latest handoff checkpoint
 
+- **Timestamp / owner:** 2026-08-28 11:20 +08:00; Codex issue #10 Task 1 complete.
+- **Issue:** GitHub #10, [domain] define deterministic canonical records and rule boundaries, assigned to it20pepito; labels type:feature, area:domain, and priority:p1.
+- **Git state:** codex/10-canonical-records in D:\Documents\Dev\solum-aims-esl-pipeline\.worktrees\issue-10-canonical-records, based on 5ecead2c2e4037e47d42e5a8886f6e949a430807; Task 1 files and this checkpoint are uncommitted pending the scoped commit.
+- **Scope:** Completed approved AD-016 Task 1 for FR-004, FR-005, and BR-018: immutable pure canonical record contracts, deterministic canonical payload/hash, and sorted path-level diffs. Canonical key is exactly store_code + item_code + selling_uom; KGS source and /100GR display prices remain distinct. No persistence, migration, adapter, scheduler, UI/API, promotion selection, conversion, weekday, or rounding policy was added; alembic/versions/0001_operational_state.py remains unchanged.
+- **Evidence:** Python 3.12.7. Captured RED: python -m pytest tests/unit/domain/test_canonical.py tests/unit/domain/test_diff.py -v produced the expected ModuleNotFoundError: No module named 'esl_service.domain'. GREEN/checks with PYTHONPATH=src (the shared .venv editable install points at the primary worktree): focused pytest 11 passed; python -m ruff check src tests passed; python -m mypy src passed for 11 source files; python -m pytest -q produced 48 passed, 1 skipped; git diff --check passed.
+- **Configuration:** No configuration variable, secret, or approved secret-storage location was read or changed. The existing root .venv was used for verification only.
+- **External state:** No PostgreSQL, SQL Server, AIMS, Jenkins, Hop, CSV delivery, device, or production state was read or mutated.
+- **Risks / next action:** Promotion winner, non-CLR conversion, weekday, and rounding policies remain UNKNOWN / NEEDS-DISCOVERY and intentionally unencoded. Next action: review the scoped diff and commit Task 1 as feat(domain): define canonical ESL record contract (#10); do not push or create a PR in this task.
+- **Timestamp / owner:** 2026-08-28 11:10 +08:00; Codex issue #10 implementation start.
+- **Issue:** GitHub #10, `[domain] define deterministic canonical records and rule boundaries`, assigned to `it20pepito`; labels `type:feature`, `area:domain`, and `priority:p1`; no GitHub dependency or blocker is recorded.
+- **Git state:** `codex/10-canonical-records` in `D:\Documents\Dev\solum-aims-esl-pipeline\.worktrees\issue-10-canonical-records`, created from current `origin/develop` at `5ecead2c2e4037e47d42e5a8886f6e949a430807`; no uncommitted files before this checkpoint.
+- **Scope:** Implement only approved AD-016 Task 1: pure immutable canonical domain contracts, deterministic serialization/hash, and path-level record diffs for FR-004, FR-005, and BR-018. Preserve `0001_operational_state.py`; do not add persistence, migrations, adapters, scheduling, UI/API, promotion-winner policy, CSV delivery, or external-system actions.
+- **Evidence:** Read the assigned issue, approved AD-016 plan, architecture canonical-snapshot contract, relevant specification/workflow requirements, and verified `tb_ESL` DDL. The legacy DDL confirms source fields; the target canonical key is `store_code + item_code + selling_uom` and source/display KGS price bases remain distinct.
+- **Configuration:** No configuration variable or secret value has been read or changed. Existing root `.venv` will be used for verification only.
+- **External state:** Created the isolated local worktree/branch only. No PostgreSQL, SQL Server, AIMS, Jenkins, Hop, CSV delivery, device, or production state was read or mutated.
+- **Risks / next action:** No issue blocker is recorded. Unresolved promotion priority, same-economic terms, non-CLR conversion, and weekday policy remain out of scope and must not be defaulted. Next action: inspect current tests, write the required failing canonical-contract tests, and capture the expected red result.
+
 - **Timestamp / owner:** 2026-08-28 10:29 +08:00; Codex AD-016 implementation-planning handoff.
 - **Issue:** GitHub #42, [docs] plan authoritative data model implementation, assigned to it20pepito; PR #43 is open against develop with type:docs, area:docs, area:persistence, and priority:p1.
 - **Git state:** Primary plan commit 738d21d on codex/42-plan-authoritative-data-model is pushed to origin; PR #43 is open and CI is running. This checkpoint is the only subsequent local change.
