@@ -123,11 +123,241 @@ flowchart TB
 | AIMS supported-API adapter | Mutate/confirm AIMS through documented vendor interface. | Reach into AIMS database tables. |
 | Compatibility adapter | Bounded read-only queries needed for cutover parity. | Write, become a general AIMS repository, or leak schema to domain. |
 | CSV compatibility delivery adapter | Produce/acknowledge files only if an identified legacy consumer remains required. | Act as workflow state, comparison evidence, audit system, or treat directory presence as success. |
-| Execution state/audit store | Durable run state, locks, attempts, canonical hashes/diffs, action ledger, configurations, and evidence. | Become a second retail/AIMS source of record or rely on local files for recovery. |
+| Execution state/audit store | Durable run state, locks, attempts, complete immutable canonical snapshots, hashes/diffs, action ledger, configurations, and evidence. | Become a second retail/AIMS source of record or rely on local files for recovery. |
 | Reconciliation service | Compare expected, processed, rejected, promotion-anomaly, submitted, acknowledged, and unresolved records; retain candidate/selection evidence. | Retry external actions without orchestration policy or suppress unresolved ambiguity. |
 | Observability/configuration | Correlated telemetry, health, validated external configuration/secrets references. | Store plaintext secrets in logs or repository. |
 
-## 5. Deployment architecture
+## 5. Authoritative target data model
+
+### 5.1 Authority, status, and ownership
+
+This section is the authoritative reference for PostgreSQL persistence models and application-level domain, API, and frontend types. It is a logical and physical-contract model, not authorization to create a migration or production schema. Each implementation issue must cite the applicable FR/NFR/BR identifiers and preserve the boundaries below.
+
+Model status has the following meaning:
+
+- **IMPLEMENTED BASELINE** — present in the immutable 0001_operational_state migration and current SQLAlchemy models; later migrations may extend it.
+- **APPROVED TARGET** — approved architecture that must be implemented through a separately reviewed issue and additive Alembic migration.
+- **UNKNOWN / NEEDS-DISCOVERY** — a value or policy that cannot be encoded until evidence and owner approval exist.
+
+The target PostgreSQL database owns workflow configuration metadata, execution state, immutable processing evidence, action history, audit, and reconciliation. SQL Server remains authoritative for retail product/price/stock/promotion source data, and SOLUM AIMS remains authoritative for vendor-owned article, label, device, and gateway state. Canonical snapshots are retained evidence for deterministic replay and audit; they do not create a second retail or AIMS master. Credentials and secret values are not part of this model.
+
+The model is divided into five bounded areas:
+
+1. Configuration: stores, schedules, and immutable non-secret configuration versions.
+2. Workflow operation: executions, leases, steps, checkpoints, events, and operator audit.
+3. Canonical business evidence: snapshots, promotions, processing outcomes, issues, and differences.
+4. External effects: intended actions, attempts, acknowledgements, and optional CSV compatibility delivery.
+5. Reconciliation: balanced execution summaries and enumerated exceptions.
+
+### 5.2 Relationship model
+
+~~~mermaid
+erDiagram
+    STORE_CONFIGURATION ||--o{ WORKFLOW_SCHEDULE : configures
+    CONFIGURATION_VERSION ||--o{ WORKFLOW_EXECUTION : governs
+    WORKFLOW_SCHEDULE o|--o{ WORKFLOW_EXECUTION : launches
+    WORKFLOW_EXECUTION ||--o| SCOPE_LEASE : owns
+    WORKFLOW_EXECUTION ||--o{ EXECUTION_STEP : contains
+    EXECUTION_STEP ||--o{ EXECUTION_CHECKPOINT : checkpoints
+    WORKFLOW_EXECUTION ||--o{ EXECUTION_EVENT : emits
+    WORKFLOW_EXECUTION o|--o{ AUDIT_ENTRY : concerns
+    WORKFLOW_EXECUTION ||--o{ SNAPSHOT_SET : captures
+    SNAPSHOT_SET ||--o{ CANONICAL_RECORD_SNAPSHOT : contains
+    CANONICAL_RECORD_SNAPSHOT ||--o| PROMOTION_EVALUATION : evaluates
+    PROMOTION_EVALUATION ||--o{ PROMOTION_CANDIDATE_SNAPSHOT : considers
+    CANONICAL_RECORD_SNAPSHOT ||--o| RECORD_PROCESSING_RESULT : produces
+    RECORD_PROCESSING_RESULT ||--o{ RECORD_ISSUE : explains
+    WORKFLOW_EXECUTION ||--o{ RECORD_DIFFERENCE : detects
+    CANONICAL_RECORD_SNAPSHOT o|--o{ RECORD_DIFFERENCE : compares
+    RECORD_PROCESSING_RESULT ||--o{ RECORD_ACTION : requests
+    RECORD_ACTION ||--o{ ACTION_ATTEMPT : attempts
+    WORKFLOW_EXECUTION ||--o{ COMPATIBILITY_DELIVERY : delivers
+    WORKFLOW_EXECUTION ||--o{ RECONCILIATION_REPORT : reconciles
+    RECONCILIATION_REPORT ||--o{ RECONCILIATION_EXCEPTION : enumerates
+~~~
+
+The canonical business key is store_code + item_code + selling_uom (BR-018). It prevents promotion candidates and decisions crossing store, item, or UOM boundaries. The legacy tb_ESL identity store_code + item_code is current-state evidence, not the target identity. A label code is also not part of product identity: one product can map to multiple labels, and each label-specific external effect is a separate action.
+
+### 5.3 Type and storage conventions
+
+| Concept | PostgreSQL representation | Rule |
+| --- | --- | --- |
+| Aggregate identifier | UUID | Generated by the application; stable across APIs and audit. |
+| Source/business identifier | Bounded VARCHAR | Preserve leading zeroes and source formatting; never coerce store/item/barcode to integers. |
+| Timestamp | TIMESTAMPTZ | Persist UTC; convert only for store/operator display. |
+| Business date/time | DATE / TIME after validation | Retain rejected raw values only in sanitized source evidence. |
+| Money | NUMERIC(19,4) plus ISO currency code | Never use binary floating point; initial currency is IDR. |
+| Quantity/weight | NUMERIC(19,4) | Supports fractional stock and future measured items. |
+| Percentage | Fixed-precision NUMERIC | Calculation and rounding version must be traceable. |
+| Controlled state/reason | Bounded VARCHAR plus CHECK and application enum | Avoid PostgreSQL native enums so additive policy evolution remains manageable. |
+| Structured evolving evidence | JSONB | Requires a typed schema name/version, allowlisted fields, and validation before persistence. |
+| Canonical hash | 64-character SHA-256 hex | Calculated from canonical UTF-8 JSON with deterministic key ordering and number formatting. |
+
+All versioned payloads must define unknown-field handling and backwards-compatibility tests. JSONB is not an untyped dumping ground and cannot contain credentials, tokens, connection strings, authorization headers, DPAPI blobs, or unrestricted request/response bodies.
+
+### 5.4 Configuration and workflow-operation entities
+
+| Entity | Status | Key and required content | Invariants / relationships |
+| --- | --- | --- | --- |
+| store_configuration | APPROVED TARGET | id; unique store_code; display name; timezone; enabled state; non-secret operational options; created/updated metadata. | Adding a store is configuration, not a code or workflow-definition change (FR-026). It owns no retail master data. |
+| configuration_version | APPROVED TARGET | id; environment; configuration schema version; content hash; sanitized JSONB snapshot; activation time/actor. | Immutable and secret-free. Every execution references exactly one configuration version (FR-002, FR-010, FR-025). |
+| workflow_schedule | IMPLEMENTED BASELINE, target extension approved | id; workflow; store; cron expression; timezone; enabled; created/updated metadata; configuration version. | Unique active schedule identity per configured workflow/store. Enable/disable changes are audited (FR-008). |
+| workflow_execution | IMPLEMENTED BASELINE, target extension approved | id; workflow; store; trigger type; SHADOW/ACTIVE mode; status; correlation ID; source window/watermark; configuration/rule versions; operator/reason; retry/replay parent; start/end; terminal reason. | One attempt for one workflow/store scope. Retry/replay creates a linked execution and never overwrites history (FR-010–FR-012). |
+| scope_lease | IMPLEMENTED BASELINE, target extension approved | scope_key; execution FK; acquired, heartbeat, expiry, release times; lease version. | At most one current owner per workflow/store scope. Expired ownership is recovered only after checkpoint/action reconciliation (FR-009, FR-017). |
+| execution_step | APPROVED TARGET | id; execution FK; stable step name; dependency outcome; attempt; state; failure class; start/end. | Makes ordering and terminal behavior explicit (FR-007, FR-014–FR-016). |
+| execution_checkpoint | APPROVED TARGET | id; step FK; unique checkpoint key/version; watermark/position; payload schema version/hash; sanitized JSONB state; time. | Append-only checkpoints make restart/replay possible without a local CSV file (FR-010, FR-027). |
+| execution_event | IMPLEMENTED BASELINE, target extension approved | id; execution FK; time; severity; event type; step; correlation ID; optional record key; schema-versioned sanitized payload. | Append-only queryable structured log for NFR-007; it is not a replacement for status/summary columns. |
+| audit_entry | APPROVED TARGET | id; optional execution FK; actor; action; reason; resource type/key; configuration version; correlation ID; outcome; sanitized before/after evidence; time. | Append-only; supports schedule/config/manual actions that may not create an execution (FR-008, FR-011, FR-022, FR-023). |
+
+Execution states are controlled as follows:
+
+~~~text
+QUEUED
+  -> RUNNING
+       -> RETRY_WAIT -> RUNNING
+       -> RECOVERING -> RUNNING
+       -> SUCCEEDED
+       -> SUCCEEDED_WITH_EXCEPTIONS
+       -> FAILED
+       -> CANCELLED
+       -> SKIPPED
+~~~
+
+Every state transition must be validated and append a structured event; manual transitions additionally append an audit entry. Recovery provenance is retained even when the final state is successful.
+
+### 5.5 Canonical snapshot contract
+
+| Entity | Status | Key and required content | Invariants / relationships |
+| --- | --- | --- | --- |
+| snapshot_set | APPROVED TARGET | id; execution FK; representation kind (SOURCE_EXPECTED, LEGACY_BASELINE, or AIMS_OBSERVED); adapter; source window/watermark; canonical schema version; capture time; record count; aggregate hash. | One immutable capture of one representation; identifies how and when it was obtained. |
+| canonical_record_snapshot | APPROVED TARGET | id; snapshot-set FK; store, item, selling UOM; canonical schema version/hash; validated full JSONB payload; captured time. | Unique by snapshot set and canonical business key. Immutable complete snapshot retained under the approved policy. |
+| promotion_evaluation | APPROVED TARGET | id; snapshot FK; rule/calculation versions; outcome; nullable selected-candidate FK; atomic resulting state; evaluation time. | Exactly one per relevant snapshot. Selection is allowed only when approved rules produce one deterministic candidate. |
+| promotion_candidate_snapshot | APPROVED TARGET | id; evaluation FK; source campaign identity; structured type/value; raw DISC_TEXT; validity/weekday evidence; category-001 price; source/resolved UOM; calculated outcome; eligibility/fallback/reason evidence. | Immutable candidate evidence. It cannot cross the canonical key or silently apply an unresolved priority/conversion policy. |
+| record_processing_result | APPROVED TARGET | id; execution and canonical-snapshot FKs; validation/eligibility/promotion outcomes; current/desired page; action decision; terminal category; time. | One per execution/business key. Multiple label actions may be related to one result. |
+| record_issue | APPROVED TARGET | id; result FK; rule/requirement ID; issue code; severity; classification; sanitized evidence; resolution metadata. | One row per rejection, anomaly, unsupported UOM, or unresolved decision so multiple issues are queryable independently. |
+| record_difference | APPROVED TARGET | id; execution; left/right snapshot FKs and hashes; difference type; changed paths; typed old/new JSONB values; diff schema/rule version. | Deterministic comparison evidence; physical CSV is never an input to the comparison (FR-004, FR-027). |
+
+The versioned canonical payload contains these typed sections:
+
+| Section | Canonical content | Relevant legacy evidence / rule |
+| --- | --- | --- |
+| identity | Store, item, selling UOM, barcode. | STORE_CODE, ITEM_CODE, UOM, BARCODE; BR-018. |
+| product | Item names, product/NFC references, brand and classification, consignment/returnable/red-list flags. | ITEM_NAME, ITEM_SHORTNAME, PRODUCT_URL, NFC_URL, DIVISION, DEPARTMENT, CLASS, SUBCLASS, BRAND, CLASS_ROTATION, CONSIGMENT, RETURNABLE, REDLIST. Canonical spelling corrects legacy CONSIGMENT without altering evidence. |
+| pricing | Currency; source regular/member price evidence; source price basis; display regular price; display basis; calculation/rounding version. | SALES_PRICE, MEMBER_PRICE, PER_GRM_SELL_PRICE; BR-004, BR-006, BR-012, BR-015. Member price is preserved evidence and is not an inferred winner rule. |
+| inventory | Stock on hand, product weight, minimum/maximum/display quantities. | SOH, PROD_WEIGHT, MIN_QTY, MAX_QTY, DISPLAY_QTY; BR-003. |
+| expiry | Validated early-expiry date and expiry days. | EARLY_EXPIRY_DATE, EXPIRY_DAYS. |
+| promotion_state | Exactly one complete selected state or no promotion: candidate/campaign, type, group, structured value, effective/display price, percentage, saving, raw text, and validity window. | DISC_PRICE, DISC_PERCENT, DISC_TEXT, PROMO_FLAG, PER_GRM_PROMO_PRICE, PROMOTION_TYPE, CAMPAIGN_GROUP, SAVE_AMT, PROMO_START_DATE, PROMO_END_DATE, PROMO_START_TIME, PROMO_END_TIME; BR-005–BR-006 and BR-011–BR-019. |
+| display_decision | Current page when observed, desired page, and reason. | BR-007–BR-010. Label-specific submission remains in the action ledger. |
+| provenance | Adapter, source watermark/references, original update time, configuration/rule/schema versions. | LAST_UPDATED_DATE, CREATED_DATE; SYNC_REC is retained only as legacy source evidence, not target workflow state. |
+
+For scalable KGS items, source economic value and display value are different fields. For example, 50,000 / KG is retained alongside 5,000 / 100GR; conversion occurs only after selling-UOM economic evaluation (BR-004, BR-015). Source floating-point values are normalized to decimal canonical values while sanitized raw evidence remains available for parity diagnosis.
+
+Promotion evaluation outcomes are NO_PROMOTION, SELECTED, AMBIGUOUS, REJECTED, or UNRESOLVED. At minimum the model preserves PROMO_PRIORITY_DIFFERENT_ECONOMIC, DISPLAY_PRIORITY_SAME_ECONOMIC, and UOM_RULE_REQUIRED. Formal winner priority, calculated effective-price/rounding comparison, authoritative non-CLR conversion, and final weekday policy remain UNKNOWN / NEEDS-DISCOVERY and cannot be represented by silent defaults.
+
+### 5.6 External action and delivery model
+
+| Entity | Status | Key and required content | Invariants / relationships |
+| --- | --- | --- | --- |
+| record_action | IMPLEMENTED BASELINE, target extension approved | id; execution/result FKs; canonical business key; optional label; action type; desired state/page; unique idempotency key; request hash; state; acknowledgement/batch identifiers; times. | Durable logical action ledger. Shadow runs may reach only INTENDED or SKIPPED_IDEMPOTENT. |
+| action_attempt | APPROVED TARGET | id; action FK; unique attempt number; start/end; retry class; HTTP/result code; sanitized response evidence; delivery certainty. | Append-only. An unknown submission is reconciled before any resend (FR-013–FR-016). |
+| compatibility_delivery | APPROVED TARGET, disabled pending consumer acceptance | id; execution FK; logical delivery ID; manifest/content hashes; publication and acknowledgement states/times; consumer reference; retention deadline. | Records the contract and acknowledgement, not CSV content as authoritative state. File presence alone never means completion (FR-028). |
+
+Action states are:
+
+~~~text
+INTENDED
+  -> SKIPPED_IDEMPOTENT
+  -> SUBMITTING
+       -> ACKNOWLEDGED
+       -> REJECTED
+       -> FAILED_RETRYABLE -> SUBMITTING
+       -> FAILED_TERMINAL
+       -> OUTCOME_UNKNOWN
+~~~
+
+OUTCOME_UNKNOWN is operator-action-required and blocks blind resubmission. The idempotency key is derived from the approved adapter contract, logical business/action key, desired state, rule/configuration versions, and reproducible source window; secret or volatile transport values are excluded.
+
+### 5.7 Reconciliation model
+
+| Entity | Status | Key and required content | Invariants / relationships |
+| --- | --- | --- | --- |
+| reconciliation_report | APPROVED TARGET | id; execution FK; unique revision; mode; generated time; counts for extracted, valid, rejected, ineligible, eligible, unchanged, ambiguous, intended, skipped-idempotent, submitted, acknowledged, rejected-by-AIMS, failed, and unresolved; status. | Immutable after finalization. New reconciliation creates another revision rather than overwriting evidence. |
+| reconciliation_exception | APPROVED TARGET | id; report FK; category; canonical record/action reference; expected/actual evidence; resolution status/actor/reason/time. | Every imbalance and unresolved external effect is enumerated, not hidden in aggregate counts. |
+
+Reconciliation is stage-based so record transformation and potentially multiple label actions are not collapsed incorrectly:
+
+~~~text
+extracted = rejected + valid
+valid = ineligible + eligible
+
+ACTIVE terminal action balance:
+eligible = unchanged + skipped_idempotent + acknowledged
+         + rejected_by_aims + failed + unresolved
+
+SHADOW terminal action balance:
+eligible = unchanged + skipped_idempotent + intended + unresolved
+~~~
+
+Ambiguous is a diagnostic subset of unresolved rather than an additional balancing category. Submitted is an in-flight observation and cannot appear in a terminal balanced report; an execution with a lingering submission becomes OUTCOME_UNKNOWN/unresolved. Promotion ambiguity and unsupported UOM are counted as unresolved and retain issue/candidate evidence. Any formula change is a business/operational change that must update the specification, architecture, workflow, and tests together.
+
+### 5.8 Immutability, retention, and deletion
+
+Configuration versions, snapshot sets, canonical snapshots, promotion evaluations/candidates, differences, issues, events, audit entries, action attempts, and finalized reconciliation revisions are append-only. State-bearing executions, steps, leases, schedules, actions, and deliveries change only through validated transitions; each material change also appends an event or audit entry.
+
+Durable evidence foreign keys must use RESTRICT, not cascading deletion. The current Task 3 cascade constraints are an IMPLEMENTED BASELINE limitation and must be replaced by an additive migration before retention/purge is enabled. The original migration remains immutable. Scope leases may be explicitly released after their recovery evidence is recorded.
+
+Exact retention durations are UNKNOWN / NEEDS-DISCOVERY until workload volume, audit needs, incident windows, and rollback gates are measured and approved. Configuration supplies per-environment values for these classes without a code change:
+
+- **Audit core:** executions, version hashes, audit, actions/acknowledgements, and reconciliation summaries.
+- **Detailed processing evidence:** canonical snapshots, promotion candidates, differences, issues, checkpoints, and detailed events.
+- **Compatibility evidence:** manifests, hashes, publication/acknowledgement metadata, and sanitized attempts under the approved consumer contract.
+- **Physical compatibility files:** separate consumer-contract retention; never a database-state substitute.
+
+Purging requires a terminal execution, finalized reconciliation, no unresolved action, expiry of rollback/audit gates, authorized operation, and an audit entry. Development/staging may have shorter approved durations than production.
+
+### 5.9 Constraints, query paths, and scale
+
+Required uniqueness includes one canonical record per snapshot set/business key, one promotion evaluation per snapshot/rule version, one source campaign identity per evaluation, one processing result per execution/business key, one logical action per idempotency key, one current lease owner per scope, and one reconciliation revision number per execution.
+
+Indexes must support:
+
+- executions by workflow/store/status/start time;
+- events by execution/time, correlation/time, severity/time, and record key;
+- snapshots/results/issues by execution and canonical key;
+- promotion evidence by store/item/UOM, campaign, outcome, and execution;
+- actions by idempotency key, execution, state, label, and acknowledgement batch;
+- audit by actor/action/resource/time; and
+- reconciliation exceptions by execution/category/resolution state.
+
+Add JSONB indexes only for measured query paths. Time partitioning is not selected until retained volumes and query plans justify it. Initial scaling remains bounded worker concurrency with per-store leases (NFR-005).
+
+### 5.10 Application-model mapping and change control
+
+| Layer | Authority and responsibility |
+| --- | --- |
+| Domain model | Immutable business concepts/rules with no SQLAlchemy, FastAPI, or transport dependency. |
+| Persistence model | PostgreSQL columns, constraints, indexes, relationships, and schema-versioned payload storage. |
+| API model | Authorized Pydantic request/response contract; internal payloads are not exposed automatically. |
+| Frontend type | Generated from or checked against the API contract; never database authority. |
+
+Business and model changes follow a documentation-first contract:
+
+1. Identify affected requirement and business-rule IDs.
+2. Update SPECIFICATION.md first when behavior or acceptance changes.
+3. Update this section's entities, invariants, ownership, lifecycle, and compatibility impact.
+4. Obtain documentation review before application/schema implementation.
+5. Add a new Alembic migration; never rewrite an applied migration.
+6. Update SQLAlchemy, domain/Pydantic, API, and exposed TypeScript models as applicable.
+7. Add requirement/rule-traceable tests and migration evidence.
+8. Record the issue checkpoint, schema state, evidence, and risks in PROGRESS.md.
+
+A pull request cannot introduce an application model or database semantic change absent from this architecture. Emergency fixes must reconcile documentation in the same pull request before merge. This governance summary remains here; the repeatable developer procedure belongs in WORKFLOW.md.
+
+### 5.11 Verification contract
+
+The data model requires empty-database and prior-schema Alembic tests; SQLAlchemy constraint integration tests; canonical schema/hash tests; BR-004/BR-015 price-basis tests; BR-016 atomic-state tests; BR-018 scope-isolation tests; BR-019 ambiguity tests; restart/replay tests from retained snapshots; lease/idempotency/retry/unknown-outcome tests; reconciliation-balance tests; retention/audit safety tests; NFR-007 operator-query tests; and API/frontend contract-drift checks. No automated test may mutate production dependencies.
+
+## 6. Deployment architecture
 
 Initial deployment is one modular **Python + PostgreSQL web application** (or active/passive only if availability discovery requires it) on supported Windows/on-premise infrastructure. Its internal browser UI is a React + TypeScript application built with Vite and Tailwind CSS; the Python backend is FastAPI. The UI uses authenticated FastAPI endpoints only and never connects directly to SQL Server, PostgreSQL, or AIMS. Google Stitch is the design/handoff source: approved exports and screenshots guide the React implementation, but are not deployed without code review, type checks, automated tests, and API-contract integration. The same application supports command-line execution for development, diagnostics, and controlled administration. For continuous production operation it can run under Windows Service Control Manager using a dedicated Windows Service account, so authorized administrators can start, stop, pause, and resume it. Pause must quiesce scheduling and allow in-flight work to checkpoint or reach a documented safe state rather than abruptly killing it. PostgreSQL is the durable execution-state, audit, reconciliation, and queryable structured event-log store. The service replaces Jenkins and Hop as runtime scheduler/orchestrator.
 
@@ -141,17 +371,17 @@ The service must have isolated **development**, **staging**, and **production** 
 - **Build/release:** GitHub Actions builds, tests, scans, and produces a versioned immutable artifact. GitHub Environments provide dev/staging/production approval gates. Until the production host receives approved GitHub network access, it receives the signed/hashed artifact through the organization's controlled transfer method and a local administrator runs the deployment procedure. If GitHub access is enabled later, require a security review and allowlist only required HTTPS destinations; the host must never retrieve production secrets from GitHub.
 - **Network:** deny public inbound access. Allow only approved administrator/deployment access from the management network. The service needs private, allowlisted routes to configured SQL Server, AIMS API, and its PostgreSQL state store; it does not require Internet access. Restrict the currently HTTP AIMS API to an allowlisted internal route; require TLS/reverse-proxy or vendor-supported secure transport if available before production acceptance. Browser-only human access is not a usable network contract for the background service.
 
-Within a run, adapters return canonical records that are transformed and compared in memory. The service persists the source scope, canonical hashes/differences, checkpoints, and delivery/action ledger in its own durable state/audit database. This provides deterministic comparison, queryable evidence, restart recovery, and idempotency without relying on physical CSV files. A CSV remains only an outbound compatibility adapter until its consumer contract is replaced or decommissioned.
+Within a run, adapters return canonical records that are transformed and compared in memory. The service persists the source scope, complete immutable canonical snapshots under configurable retention, canonical hashes/differences, checkpoints, and delivery/action ledger in its own durable state/audit database. This provides deterministic comparison, queryable evidence, restart recovery, and idempotency without relying on physical CSV files. A CSV remains only an outbound compatibility adapter until its consumer contract is replaced or decommissioned.
 
 Containers, Kubernetes, message brokers, and distributed workflow platforms are deliberately not selected: current evidence does not demonstrate a scale or availability requirement that justifies their operational cost. Scaling starts with measured, bounded workers and per-store scope locks.
 
-## 6. Technology evaluation and decision gates
+## 7. Technology evaluation and decision gates
 
-No implementation language is locked before operations, skills, deployment policy, support model, and AIMS contract discovery. The default candidate is Python 3.12+ because it can provide SQL Server/API clients, testable modular services, scheduling, and Windows support with low deployment complexity. C# is a strong alternative if the organization’s Windows service, identity, operations, or team-support standards make it materially lower risk. Java/Go require a demonstrated operational or integration advantage.
+The approved implementation stack is Python 3.12, FastAPI, SQLAlchemy 2, Alembic, and PostgreSQL for the service, with React, TypeScript, Vite, and Tailwind CSS for the browser UI. A change requires an ADR showing a material operational, support, security, or integration advantage and a migration plan for existing models/contracts.
 
-Before implementation, score candidates against SQL Server drivers, Windows service management, secret/identity integration, AIMS API support, testing, observability, deployment, team competency, maintenance, and performance baseline. Record the result as an ADR. No microservice split is permitted without measured justification.
+No microservice split, container platform, broker, or distributed workflow engine is permitted without measured scale/availability evidence and explicit architecture approval.
 
-## 7. Failure architecture
+## 8. Failure architecture
 
 | Dependency / failure | Detection | Retry / recovery | Data-consistency rule | Operator action |
 | --- | --- | --- | --- | --- |
@@ -165,11 +395,11 @@ Before implementation, score candidates against SQL Server drivers, Windows serv
 | Disk exhaustion / logging outage | Host/telemetry health. | Stop new work safely when durability/audit cannot be ensured. | Preserve state before action. | Restore capacity. |
 | Expired/rotated credential | Authentication health. | Retry after approved rotation only. | No fallback to embedded credentials. | Rotate secret and validate. |
 
-## 8. Security architecture
+## 9. Security architecture
 
 Trust boundaries are SQL Server, AIMS API, optional read-only AIMS PostgreSQL, filesystem consumer, secrets platform, and monitoring platform. Each receives a separate identity and least privilege. The compatibility identity may SELECT only the explicitly approved views/tables and must lack write/DDL privileges. Target AIMS mutations require approved API authentication, TLS where supported, request/response audit, and allowlisted network routes. Credentials, encrypted blobs, and host-specific production configuration are never copied into documentation or source control.
 
-## 9. Architectural decisions
+## 10. Architectural decisions
 
 | ID | Decision | Status / rationale |
 | --- | --- | --- |
@@ -179,10 +409,13 @@ Trust boundaries are SQL Server, AIMS API, optional read-only AIMS PostgreSQL, f
 | AD-004 | Allow a temporary read-only AIMS PostgreSQL compatibility adapter for first cutover. | Approved by stakeholder; retire/replace after vendor API investigation. |
 | AD-005 | Use shadow-first migration and preserve legacy fallback. | Approved; avoids big-bang cutover. |
 | AD-006 | Do not create repository-local skills yet. | Verified compatible repository-local convention was not established from official documentation; no justified repeatable workflow exists in this phase. |
-| AD-007 | Process canonical records in memory and persist comparison/delivery state in the target state/audit database. | Approved; CSV files are not a target state or parity mechanism and remain only as temporary compatibility delivery if required. |
+| AD-007 | Process canonical records in memory and persist complete immutable snapshots under configurable retention plus comparison/delivery state in the target state/audit database. | Approved; CSV files are not a target state or parity mechanism and remain only as temporary compatibility delivery if required. |
 | AD-008 | Use Python + PostgreSQL as an internal web application with browser UI/API, CLI, and optional Windows Service hosting. | Stakeholder clarified that the system is web based and may run as a Windows Service or by command line; PostgreSQL owns target state/audit/log queries, not retail/AIMS source data. |
 | AD-009 | Use Windows DPAPI-protected per-environment secret bundles and GitHub Actions artifact promotion with controlled local deployment. | Chosen for the currently known Windows/GitHub and potentially Internet-isolated production environment; production does not need GitHub connectivity. |
 | AD-010 | Accept the high-spec Windows 10 PC as the production host under operational risk acceptance; deny public ingress and use least-privilege private network routes. | This removes the unavailable Windows Server dependency while recording the operational controls and future-platform improvement path. |
 | AD-011 | Use FastAPI for the internal backend/API and React + TypeScript + Vite + Tailwind CSS for the browser UI; use Google Stitch as a versioned design handoff. | The stack supports typed API contracts, controlled Windows deployment, and systematic conversion of Stitch exports into maintainable, tested components. |
 | AD-012 | Use an automated ACL-restricted CSV/ready-manifest/acknowledgement handshake for bounded compatibility delivery. | The legacy consumer is unknown, so PostgreSQL remains authoritative and file presence is never completion. The adapter is disabled until consumer acceptance and adds no HTTP surface. |
-| AD-013 | Extract promotion behavior into explicit, independently testable domain rules and retain a reference-directed conservative selection strategy until business priority is approved. | The new business-rule reference defines target eligibility, pricing, UOM, atomic-state, and anomaly boundaries; deployed parity remains a separate evidence gate because the supplied procedure is review-only, filters status, and is not safely executable as supplied. |
+| AD-013 | Use remote develop as the issue-led integration branch. | Approved workflow: issue branches target develop, merge only after review/check evidence, and local develop is fast-forwarded after each merge. |
+| AD-014 | Trace every implementation or documentation change to an assigned GitHub issue and isolated branch/worktree. | Approved; keeps scope, test evidence, handoff, and external effects reviewable across agents. |
+| AD-015 | Extract promotion behavior into explicit, independently testable domain rules and retain a reference-directed conservative selection strategy until business priority is approved. | The new business-rule reference defines target eligibility, pricing, UOM, atomic-state, and anomaly boundaries; deployed parity remains a separate evidence gate because the supplied procedure is review-only, filters status, and is not safely executable as supplied. |
+| AD-016 | Use a hybrid relational plus versioned-JSONB model and retain complete immutable canonical snapshots under configurable retention. | Approved by stakeholder. Stable identities, states, relationships, and query fields remain relational; evolving evidence is typed, versioned, hashed JSONB. Documentation changes precede app/schema changes, and snapshots remain audit/replay evidence rather than a retail/AIMS master. |
