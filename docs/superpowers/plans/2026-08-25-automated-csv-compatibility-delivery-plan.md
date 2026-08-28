@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **Sequencing notice (2026-08-28):** This plan remains blocked by consumer acceptance under issue #30. Its persistence task follows `docs/superpowers/plans/2026-08-28-authoritative-data-model-implementation-plan.md`, uses the new persistence models package, and takes the next Alembic revision after `0008_authoritative_model_gate.py` (expected `0009_compatibility_delivery.py`).
+
 **Goal:** Implement an automated, durable, acknowledgement-based SKU CSV compatibility adapter without using CSV as workflow state or exposing a new HTTP API.
 
 **Architecture:** Persist one immutable delivery record before atomically publishing a legacy-compatible CSV and ready manifest to an ACL-restricted outbox. A scheduler-owned poller validates atomic acknowledgement files and records `ACKNOWLEDGED` or `UNRESOLVED` outcomes in PostgreSQL; it never treats file presence as completion and never blindly resends. Keep the adapter disabled until the consumer owner validates the contract in non-production.
