@@ -1,5 +1,7 @@
 """FR-004/FR-005/BR-018 tests for immutable canonical ESL records."""
 
+import hashlib
+import json
 from dataclasses import FrozenInstanceError, replace
 from datetime import UTC, date, datetime, time, timedelta, timezone
 from decimal import Decimal
@@ -10,6 +12,7 @@ from esl_service.domain import (
     CanonicalKey,
     DisplayDecision,
     PriceBasis,
+    PromotionStateData,
     canonical_hash,
     canonical_payload,
 )
@@ -43,6 +46,12 @@ def test_fr_004_serializes_decimals_dates_enums_and_hashes_deterministically() -
     assert payload["provenance"]["source_updated_at"] == "2026-08-28T01:59:00+00:00"
     assert payload["pricing"]["display_price_basis"] == "100GR"
     assert canonical_hash(record) == canonical_hash(replace(record, inventory=replace(record.inventory, stock_on_hand=Decimal("15.5000"))))
+    expected_hash = hashlib.sha256(
+        json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True).encode(
+            "utf-8"
+        )
+    ).hexdigest()
+    assert canonical_hash(record) == expected_hash
 
 
 def test_fr_004_rejects_float_values_from_canonical_serialization() -> None:
@@ -98,3 +107,25 @@ def test_fr_004_rejects_naive_datetimes_from_canonical_serialization() -> None:
     """FR-004 requires timestamp values to identify an unambiguous UTC instant."""
     with pytest.raises(ValueError, match="naive datetime"):
         canonical_payload(datetime(2026, 8, 28, 9, 30, 15))  # noqa: DTZ001
+
+def test_fr_004_preserves_raw_promotion_display_text_unchanged() -> None:
+    """FR-004 retains raw DISC_TEXT as display/audit evidence without parsing it."""
+    raw_disc_text = "  Promo | Harga Äœ |  "
+    record = canonical_record(
+        promotion_state=PromotionStateData(
+            source_campaign_id="CAMPAIGN-084-1",
+            promotion_flag="Y",
+            promotion_type="PERCENT",
+            campaign_group="WEEKEND",
+            structured_value=Decimal(10),
+            effective_price=Decimal(45000),
+            display_price=Decimal(4500),
+            discount_percentage=Decimal(10),
+            saving_amount=Decimal(5000),
+            raw_disc_text=raw_disc_text,
+            starts_at=None,
+            ends_at=None,
+        )
+    )
+
+    assert canonical_payload(record)["promotion_state"]["raw_disc_text"] == raw_disc_text
