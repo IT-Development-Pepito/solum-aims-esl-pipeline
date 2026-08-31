@@ -115,7 +115,7 @@ def test_a_disabled_schedule_creates_no_execution(
         schedule.id, instant=jakarta(2026, 8, 31, 7, 30), **scope(configuration_version_id)
     )
 
-    assert launched is None
+    assert launched.launched is False
     assert execution_count(session) == before
 
 
@@ -137,7 +137,7 @@ def test_an_enabled_schedule_outside_its_cadence_creates_no_execution(
         schedule.id, instant=jakarta(2026, 8, 31, 6, 30), **scope(configuration_version_id)
     )
 
-    assert launched is None
+    assert launched.launched is False
 
 
 def test_an_enabled_schedule_launches_a_scheduled_execution(
@@ -157,11 +157,11 @@ def test_an_enabled_schedule_launches_a_scheduled_execution(
         schedule.id, instant=jakarta(2026, 8, 31, 7, 30), **scope(configuration_version_id)
     )
 
-    assert launched is not None
-    assert launched.trigger_type == TriggerType.SCHEDULED.value
-    assert launched.workflow_name == "esl-refresh"
-    assert launched.store_code == "084"
-    assert launched.requested_by is None
+    assert launched.execution is not None
+    assert launched.execution.trigger_type == TriggerType.SCHEDULED.value
+    assert launched.execution.workflow_name == "esl-refresh"
+    assert launched.execution.store_code == "084"
+    assert launched.execution.requested_by is None
 
 
 def test_due_schedules_never_include_a_disabled_one(
@@ -244,7 +244,7 @@ def test_disabling_a_schedule_stops_the_next_run(
     due = jakarta(2026, 8, 31, 7, 30)
     assert launch_repository.launch_scheduled(
         schedule.id, instant=due, **scope(configuration_version_id)
-    )
+    ).launched
 
     launch_repository.set_schedule_enabled(
         schedule.id, enabled=False, actor="ops.bob", reason="INC-4242 price freeze"
@@ -253,8 +253,8 @@ def test_disabling_a_schedule_stops_the_next_run(
     assert (
         launch_repository.launch_scheduled(
             schedule.id, instant=due, **scope(configuration_version_id)
-        )
-        is None
+        ).launched
+        is False
     )
 
 
@@ -305,16 +305,17 @@ def test_a_manual_launch_creates_an_execution_with_identity_and_reason(
 ) -> None:
     """The second acceptance criterion, checked against a real row."""
 
-    execution = launch_repository.launch_manual(
+    launched = launch_repository.launch_manual(
         ManualLaunch(requested_by="ops.alice", reason="INC-1234 price correction"),
         workflow_name="esl-refresh",
         store_code="084",
         **scope(configuration_version_id),
     )
 
-    assert execution.trigger_type == TriggerType.MANUAL.value
-    assert execution.requested_by == "ops.alice"
-    assert execution.reason == "INC-1234 price correction"
+    assert launched.execution is not None
+    assert launched.execution.trigger_type == TriggerType.MANUAL.value
+    assert launched.execution.requested_by == "ops.alice"
+    assert launched.execution.reason == "INC-1234 price correction"
 
 
 def test_a_manual_launch_is_audit_visible_against_its_execution(
@@ -324,15 +325,19 @@ def test_a_manual_launch_is_audit_visible_against_its_execution(
 ) -> None:
     """Launch source is audit-visible, so a run's origin needs no log parsing."""
 
-    execution = launch_repository.launch_manual(
+    launched = launch_repository.launch_manual(
         ManualLaunch(requested_by="ops.alice", reason="INC-1234 price correction"),
         workflow_name="esl-refresh",
         store_code="084",
         **scope(configuration_version_id),
     )
 
+    assert launched.execution is not None
     entry = session.scalars(
-        select(AuditEntry).where(AuditEntry.execution_id == execution.id)
+        select(AuditEntry).where(
+            AuditEntry.execution_id == launched.execution.id,
+            AuditEntry.action == WORKFLOW_LAUNCHED,
+        )
     ).one()
     assert entry.action == WORKFLOW_LAUNCHED
     assert entry.actor == "ops.alice"
@@ -353,13 +358,16 @@ def test_a_scheduled_launch_is_audit_visible_as_scheduled(
         actor="ops.alice",
         reason="CHG-9001 initial configuration",
     )
-    execution = launch_repository.launch_scheduled(
+    launched = launch_repository.launch_scheduled(
         schedule.id, instant=jakarta(2026, 8, 31, 7, 30), **scope(configuration_version_id)
     )
 
-    assert execution is not None
+    assert launched.execution is not None
     entry = session.scalars(
-        select(AuditEntry).where(AuditEntry.execution_id == execution.id)
+        select(AuditEntry).where(
+            AuditEntry.execution_id == launched.execution.id,
+            AuditEntry.action == WORKFLOW_LAUNCHED,
+        )
     ).one()
     assert entry.action == WORKFLOW_LAUNCHED
     assert entry.actor == SCHEDULER_ACTOR
