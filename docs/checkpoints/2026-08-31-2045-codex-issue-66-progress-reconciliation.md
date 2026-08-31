@@ -1,0 +1,8 @@
+- **Timestamp / owner:** 2026-08-31 20:45 +08:00; Codex issue #66 documentation reconciliation.
+- **Issue:** GitHub #66, [docs] reconcile progress summary after merged foundation work, assigned to it20pepito; labels type:docs, area:docs, priority:p1.
+- **Git state:** `codex/66-reconcile-progress-summary` in `D:\Documents\Dev\solum-aims-esl-pipeline\.worktrees\issue-66-reconcile-progress-summary`, created from `origin/develop` at `6ba029f`; no commit or PR yet; `docs/PROGRESS.md` is modified.
+- **Scope:** Reconciled `docs/PROGRESS.md` with merged issues #12, #14, #18, #19, #25, #27, #36, and #62; recorded the #27/#62 Task 7 split and corrected stale next actions. Non-goals: application code, migration, configuration, business-rule, and production-system changes.
+- **Evidence:** Read the four newest implementation checkpoints, inspected local `develop` at `6ba029f`, and verified merged PRs #55, #56, #57, #59, #60, #61, #63, and #65 plus closed issue state through GitHub CLI. `git diff --check` passes for the documentation diff.
+- **Configuration:** None read or changed; no secret, connection string, or DPAPI material exposed.
+- **External state:** Created GitHub issue #66 only. No PostgreSQL, SQL Server, AIMS, Jenkins, Hop, CSV-delivery, ESL-device, or production state accessed or changed.
+- **Risks / next action:** `PROGRESS.md` is a summary and can become stale after future merges; the immutable per-issue checkpoint files remain detailed evidence. Next action: review the documentation diff, commit it, and open a PR to `develop`.

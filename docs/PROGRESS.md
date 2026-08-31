@@ -1,6 +1,6 @@
 # Current Phase
 
-The **engineering phase began on 2026-08-25** after the dedicated local non-production PostgreSQL test connection was verified. Task 3 durable workflow state and its CI recovery fix are merged into `develop`; GitHub Actions verified the resulting branch. The automated CSV compatibility contract remains approved but its follow-on implementation is deferred until foundation Tasks 3, 6, and 7 and the consumer acceptance gate are complete.
+The **engineering phase began on 2026-08-25** after the dedicated local non-production PostgreSQL test connection was verified. Foundation workflow, validation, promotion-evidence, action-lifecycle, audit/reconciliation, health/configuration, and safe retention/audit-read work through PR #65 are merged into `develop`. The automated CSV compatibility contract remains approved but its follow-on implementation is deferred until its foundation dependencies and the consumer acceptance gate are complete.
 
 
 ## Cross-agent implementation checkpoints
@@ -39,6 +39,14 @@ a newer one.
 
 # Completed
 
+- GitHub #14 merged through PR #55 at 228746e: FR-007 explicit workflow states, terminal behavior, dependency conditions, deterministic ordering, and auditable transition decisions.
+- GitHub #18 merged through PR #56 at 3317483: durable restart-safe execution state and recovery behavior.
+- GitHub #36 merged through PR #57 at b3ae64e: promotion eligibility, UOM, atomic candidate state, and decision evidence; formal winner priority remains unresolved.
+- GitHub #12 merged through PR #59 at 10eb6db: structural source validation and safe quarantine; configured range/domain thresholds remain explicitly deferred to blocked discovery issue #58.
+- GitHub #19 merged through PR #60 at 19d1641: durable logical idempotency keys, action lifecycle, attempts, and reconciliation-required outcomes.
+- GitHub #25 merged through PR #61 at 422a072: reconciliation balance validation plus durable audit, exception, and event evidence.
+- GitHub #27 merged through PR #63 at 61aabcb: liveness/readiness/dependency health and versioned configuration validation. Its GitHub scope differed from the AD-016 Task 7 assignment, so the plan's retention and audit-read work was separately tracked rather than silently folded into #27.
+- GitHub #62 merged through PR #65 at 6ba029f: disabled-by-default configurable evidence retention guards and sanitized audit read models, completing the remaining AD-016 Task 7 work. Its identified foreign-key purge limitation is tracked by blocked issue #64, after the Task 8 migration slot is resolved.
 - AD-016 Task 2 merged through PR #45 at 4ce8eba, closing #13: configuration, canonical snapshot, and difference persistence with additive migration 0002_configuration_and_snapshots. GitHub Actions verified the branch (Ruff, mypy for 16 source files, pytest 55 passed / 12 skipped without a configured test database, frontend typecheck, Vitest, and Vite build). The same suite reports 67 passed with no skip against the dedicated non-production database, which now rests at 0002.
 - Approved authoritative data model merged through PR #41 at 1d1ca8d; root develop is synchronized and post-merge verification passed.
 - Inspected all supplied current-system evidence under `docs/sql-server/` and `docs/hop-jenkins-pipeline/`.
@@ -51,11 +59,11 @@ a newer one.
 
 # In Progress
 
-- GitHub #14 implements FR-007 on branch `codex/14-explicit-workflow-states` through commits `53bcf6b`, `b5e1711`, and review correction `36779c0`: a transport-independent workflow contract for explicit execution states, terminal behavior, dependency conditions, deterministic ordering, and auditable transition decisions. The corrected branch-tip gate passes Ruff, mypy (17 source files), pytest (73 passed / 12 database-dependent skips), frontend typecheck, Vitest (1 passed), Vite build, and `git diff --check`. PR #55 has completed independent follow-up review, has green GitHub Actions checks, and is linked to issue #14 through GitHub Development; it is awaiting the final documentation-only check and merge. Persistence and migration integration remain deferred to dependent issue #18; no external system or database was accessed.
 - BR-005 promotion precedence is on hold pending POS/merchandising decision.
-- The GitHub requirement backlog is ready: parent epics #5–#9 and assigned child issues #10–#32. Implement only a selected, unblocked child issue at a time through the issue-led `develop` workflow.
-- Promotion-rule child issues #36 and #37 are ready under epic #5; formal winner priority, same-economic campaign terms, non-CLR conversion, and final weekday policy remain unresolved.
+- The GitHub requirement backlog and its later follow-on issues are assigned and tracked through the issue-led `develop` workflow. Implement only a selected, unblocked issue at a time.
+- Promotion-rule issue #37 remains open. Its #36 candidate-state and #25 audit/reconciliation prerequisites are complete; it must retain unresolved ambiguity rather than invent winner priority. #38 and representative cases remain required before any deployed-compatibility claim.
 - P0 issue #38 blocks source-adapter parity until SQL-owner review removes or explains the direct procedure self-invocation and supplies non-production boundary evidence.
+- P2 issue #58 is blocked until merchandising/POS and data owners provide configured range/domain thresholds and severity policy. P2 issue #64 is blocked until AD-016 Task 8 resolves the next migration slot.
 - Discovery of the unknown operational and business contracts listed below.
 
 # Next
@@ -66,7 +74,7 @@ a newer one.
 4. Obtain SOLUM-supported API documentation and decide the retirement path for compatibility reads.
 5. Confirm promotion precedence, same-economic campaign terms, non-CLR UOM conversion, and final weekday-metadata policy.
 6. Measure workload, schedule, latency, failure, and recovery baselines.
-7. Obtain reference-policy approval and representative deployed parity cases for campaign status/date-time, cross-midnight, calculated-economic comparison, and existing-state selection; resolve #38 before source-adapter parity, then implement #36 and #37 through the issue-led `develop` workflow.
+7. Maintain the AD-016 migration sequence: Task 8 / #21 owns the reserved `0008` authoritative-model-gate migration; issue #64 follows only after that slot is resolved. Issue #37 consumes the completed #25 evidence after Task 8; do not claim deployed compatibility until #38 and representative parity cases are complete.
 
 # Decisions Made
 
