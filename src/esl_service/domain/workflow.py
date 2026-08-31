@@ -32,13 +32,7 @@ _TERMINAL_EXECUTION_STATUSES = frozenset(
 _ALLOWED_EXECUTION_TRANSITIONS: Mapping[
     ExecutionStatus, frozenset[ExecutionStatus]
 ] = {
-    ExecutionStatus.QUEUED: frozenset(
-        {
-            ExecutionStatus.RUNNING,
-            ExecutionStatus.CANCELLED,
-            ExecutionStatus.SKIPPED,
-        }
-    ),
+    ExecutionStatus.QUEUED: frozenset({ExecutionStatus.RUNNING}),
     ExecutionStatus.RUNNING: frozenset(
         {
             ExecutionStatus.RETRY_WAIT,
@@ -47,14 +41,11 @@ _ALLOWED_EXECUTION_TRANSITIONS: Mapping[
             ExecutionStatus.SUCCEEDED_WITH_EXCEPTIONS,
             ExecutionStatus.FAILED,
             ExecutionStatus.CANCELLED,
+            ExecutionStatus.SKIPPED,
         }
     ),
-    ExecutionStatus.RETRY_WAIT: frozenset(
-        {ExecutionStatus.RUNNING, ExecutionStatus.CANCELLED}
-    ),
-    ExecutionStatus.RECOVERING: frozenset(
-        {ExecutionStatus.RUNNING, ExecutionStatus.FAILED}
-    ),
+    ExecutionStatus.RETRY_WAIT: frozenset({ExecutionStatus.RUNNING}),
+    ExecutionStatus.RECOVERING: frozenset({ExecutionStatus.RUNNING}),
 }
 
 

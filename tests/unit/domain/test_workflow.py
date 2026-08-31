@@ -17,13 +17,13 @@ def _workflow_module():  # type: ignore[no-untyped-def]
     ("states", "terminal_status"),
     [
         (("QUEUED", "RUNNING", "SUCCEEDED"), "SUCCEEDED"),
-        (("QUEUED", "SKIPPED"), "SKIPPED"),
+        (("QUEUED", "RUNNING", "SKIPPED"), "SKIPPED"),
         (
             ("QUEUED", "RUNNING", "RETRY_WAIT", "RUNNING", "SUCCEEDED"),
             "SUCCEEDED",
         ),
         (("QUEUED", "RUNNING", "FAILED"), "FAILED"),
-        (("QUEUED", "CANCELLED"), "CANCELLED"),
+        (("QUEUED", "RUNNING", "CANCELLED"), "CANCELLED"),
         (
             ("QUEUED", "RUNNING", "RECOVERING", "RUNNING", "SUCCEEDED"),
             "SUCCEEDED",
@@ -78,6 +78,31 @@ def test_fr_007_invalid_transition_is_rejected_with_audit_evidence() -> None:
         "to_status": "RUNNING",
         "reason_code": "INVALID_EXECUTION_TRANSITION",
     }
+
+
+@pytest.mark.parametrize(
+    ("previous", "requested"),
+    [
+        ("QUEUED", "CANCELLED"),
+        ("QUEUED", "SKIPPED"),
+        ("RETRY_WAIT", "CANCELLED"),
+        ("RECOVERING", "FAILED"),
+    ],
+)
+def test_fr_007_undocumented_transition_is_rejected(
+    previous: str, requested: str
+) -> None:
+    """Adding an execution edge absent from architecture section 5.4 must fail."""
+
+    workflow = _workflow_module()
+
+    with pytest.raises(workflow.InvalidWorkflowTransition) as caught:
+        workflow.transition_execution(
+            workflow.ExecutionStatus(previous),
+            workflow.ExecutionStatus(requested),
+        )
+
+    assert caught.value.audit_event.payload["reason_code"] == "INVALID_EXECUTION_TRANSITION"
 
 
 def test_fr_007_dependencies_define_conditions_and_stable_ordering() -> None:
