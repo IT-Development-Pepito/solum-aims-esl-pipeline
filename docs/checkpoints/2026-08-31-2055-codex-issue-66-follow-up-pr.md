@@ -1,0 +1,8 @@
+- **Timestamp / owner:** 2026-08-31 20:55 +08:00; Codex issue #66 follow-up PR handoff.
+- **Issue:** GitHub #66, [docs] reconcile progress summary after merged foundation work, assigned to it20pepito; labels type:docs, area:docs, priority:p1. Reopened because the remaining clarification is in PR #68.
+- **Git state:** `codex/66-reconcile-progress-summary` in `D:\Documents\Dev\solum-aims-esl-pipeline\.worktrees\issue-66-reconcile-progress-summary`, rebased onto `develop` merge `36f3246`; the one remaining clarification commit is `e1b0dc1`; PR #68 targets `develop`.
+- **Scope:** PR #67 merged the primary reconciliation at `36f3246`. The unmerged clarification renames the summary section to `Open Work / Blockers` and records that #21 remains blocked by #20 and adapters #11 and #22–#24. Non-goals: no implementation, migration, configuration, business-rule, or external-system changes.
+- **Evidence:** PR #67 had two successful `verify` checks before merge. Local `git diff --check` passed before the clarification commit. GitHub issue #21 and PR #68 metadata were read through GitHub CLI.
+- **Configuration:** None read or changed; no secret, connection string, or DPAPI material exposed.
+- **External state:** GitHub only: PR #67 merged by it20pepito; root `develop` was synchronized; PR #68 was opened and issue #66 was reopened to track it. No PostgreSQL, SQL Server, AIMS, Jenkins, Hop, CSV-delivery, ESL-device, or production state accessed or changed.
+- **Risks / next action:** PR #68 has pending CI and still requires the workflow's non-authoring cross-agent review comment plus a GitHub Development-sidebar link before merge. Next action: wait for CI, obtain review, merge PR #68, close #66, and remove the worktree.
