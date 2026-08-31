@@ -64,6 +64,8 @@ a newer one.
 - Promotion-rule issue #37 remains open. Its #36 candidate-state and #25 audit/reconciliation prerequisites are complete; it must retain unresolved ambiguity rather than invent winner priority. #38 and representative cases remain required before any deployed-compatibility claim.
 - P0 issue #38 blocks source-adapter parity until SQL-owner review removes or explains the direct procedure self-invocation and supplies non-production boundary evidence.
 - P2 issue #58 is blocked until merchandising/POS and data owners provide configured range/domain thresholds and severity policy. P1 issue #21 remains blocked by #20 and the unimplemented adapters in #11 and #22–#24; P2 issue #64 follows only after #21 resolves the reserved migration slot.
+- Retry limits, timeout, backoff bounds, and jitter ratio shipped with #20 are **provisional operational defaults**, not measured targets. NFR-004 requires each target to come from a measured baseline and no workload baseline has been captured, so these values must be reviewed against measured latency and failure data before production acceptance.
+- Concrete adapter fault mapping for #20 is deferred: translating a specific SQL Server, AIMS API, or compatibility-read error into a documented failure signal belongs with adapters #11 and #22 through #24. The classification matrix and retry policy are complete and independent of them.
 - Discovery of the unknown operational and business contracts listed below.
 
 # Next

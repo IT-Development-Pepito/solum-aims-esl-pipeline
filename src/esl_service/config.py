@@ -4,6 +4,7 @@ import ctypes
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from decimal import Decimal
 from pathlib import Path
 from typing import ClassVar, Literal, NoReturn, Protocol
 
@@ -403,6 +404,14 @@ class Settings(BaseSettings):
     secret_bundle_path: Path = Path(r"C:\ProgramData\SOLUM\ESL\secrets.dpapi")
     # Retention durations are UNKNOWN / NEEDS-DISCOVERY, so none is defaulted.
     # Purge stays disabled until the business supplies every applicable value.
+    # Retry behaviour is operational configuration (FR-015). These defaults are
+    # provisional: NFR-004 requires targets to come from a measured baseline,
+    # and no workload baseline has been captured yet.
+    retry_max_attempts: int = 3
+    retry_timeout_seconds: Decimal = Decimal(30)
+    retry_initial_backoff_seconds: Decimal = Decimal(1)
+    retry_max_backoff_seconds: Decimal = Decimal(60)
+    retry_jitter_ratio: Decimal = Decimal("0.5")
     retention_purge_enabled: bool = False
     audit_core_days: int | None = None
     detailed_evidence_days: int | None = None
@@ -418,6 +427,27 @@ class Settings(BaseSettings):
     service_identity_validator_factory: ClassVar[
         Callable[[], ServiceIdentityValidator]
     ] = WindowsServiceIdentityValidator
+
+    @model_validator(mode="after")
+    def validate_retry_configuration(self) -> "Settings":
+        """Refuse a retry configuration that could never make progress."""
+
+        for name in (
+            "retry_max_attempts",
+            "retry_timeout_seconds",
+            "retry_initial_backoff_seconds",
+            "retry_max_backoff_seconds",
+        ):
+            if getattr(self, name) <= 0:
+                raise ValueError(f"{name} must be positive")
+        if not Decimal(0) <= self.retry_jitter_ratio <= Decimal(1):
+            raise ValueError("retry_jitter_ratio must be between zero and one")
+        if self.retry_max_backoff_seconds < self.retry_initial_backoff_seconds:
+            raise ValueError(
+                "retry_max_backoff_seconds must not be below "
+                "retry_initial_backoff_seconds"
+            )
+        return self
 
     @model_validator(mode="after")
     def validate_retention_configuration(self) -> "Settings":
