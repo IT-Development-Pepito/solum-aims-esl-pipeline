@@ -12,15 +12,18 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
+from esl_service.domain.outcomes import RecordProcessingEvidence
 from esl_service.domain.promotion_evidence import (
     PromotionCandidateEvidence,
     PromotionEvaluationEvidence,
     PromotionOutcome,
 )
-from esl_service.domain.serialization import canonical_payload
+from esl_service.domain.serialization import canonical_payload, sanitize_evidence
 from esl_service.persistence.models import (
     PromotionCandidateSnapshot,
     PromotionEvaluation,
+    RecordIssue,
+    RecordProcessingResult,
 )
 
 
@@ -105,3 +108,79 @@ class PromotionEvidenceRepository:
             reason_codes=list(candidate.reason_codes),
             fallback_codes=list(candidate.fallback_codes),
         )
+
+
+class RecordOutcomeRepository:
+    """Persists per-record processing outcomes and their issues.
+
+    Every issue is stored as its own row, so a record that failed for several
+    independent reasons keeps all of them queryable (FR-006, FR-022).
+    """
+
+    #: Schema version of the sanitized issue evidence payload.
+    EVIDENCE_SCHEMA_VERSION = "record-issue-v1"
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def record_processing_result(
+        self,
+        execution_id: UUID,
+        snapshot_id: UUID,
+        evidence: RecordProcessingEvidence,
+    ) -> RecordProcessingResult:
+        """Persist one record's outcome together with all of its issues."""
+
+        result = RecordProcessingResult(
+            execution_id=execution_id,
+            canonical_record_snapshot_id=snapshot_id,
+            store_code=evidence.key.store_code,
+            item_code=evidence.key.item_code,
+            selling_uom=evidence.key.selling_uom,
+            validation_status=evidence.validation_status.value,
+            eligibility_status=evidence.eligibility_status.value,
+            promotion_outcome=(
+                None
+                if evidence.promotion_outcome is None
+                else evidence.promotion_outcome.value
+            ),
+            current_page=evidence.current_page,
+            desired_page=evidence.desired_page,
+            action_decision=evidence.action_decision.value,
+            processing_status=evidence.processing_status.value,
+        )
+        self._session.add(result)
+        self._session.flush()
+
+        for position, item in enumerate(evidence.issues):
+            self._session.add(
+                RecordIssue(
+                    result_id=result.id,
+                    sequence=position,
+                    rule_id=item.rule_id,
+                    issue_code=item.issue_code,
+                    severity=item.severity,
+                    classification=item.classification,
+                    evidence_schema_version=self.EVIDENCE_SCHEMA_VERSION,
+                    # Re-checked here so persistence cannot store a secret even
+                    # if a caller built the contract by another route.
+                    evidence=sanitize_evidence(dict(item.evidence)),
+                )
+            )
+        self._session.flush()
+        return result
+
+    def list_results(self, execution_id: UUID) -> list[RecordProcessingResult]:
+        """Return one execution's record outcomes with their issues."""
+
+        statement = (
+            select(RecordProcessingResult)
+            .where(RecordProcessingResult.execution_id == execution_id)
+            .order_by(
+                RecordProcessingResult.store_code,
+                RecordProcessingResult.item_code,
+                RecordProcessingResult.selling_uom,
+            )
+            .options(selectinload(RecordProcessingResult.issues))
+        )
+        return list(self._session.scalars(statement))

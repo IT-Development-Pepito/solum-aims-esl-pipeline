@@ -9,10 +9,15 @@ FR-025) and the controlled vocabularies persistence stores alongside it.
 which class a failure belongs to is out of scope here.
 """
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 from uuid import UUID
+
+from esl_service.domain.canonical import CanonicalKey
+from esl_service.domain.promotion_evidence import PromotionOutcome
+from esl_service.domain.serialization import JSONValue, sanitize_evidence
 
 
 class ExecutionMode(StrEnum):
@@ -81,3 +86,101 @@ class NewExecution:
 
         if self.source_window_start > self.source_window_end:
             raise ValueError("source_window_start must not follow source_window_end")
+
+
+class ValidationStatus(StrEnum):
+    """Whether a source record passed structural validation (FR-003)."""
+
+    VALID = "VALID"
+    REJECTED = "REJECTED"
+
+
+class EligibilityStatus(StrEnum):
+    """Whether a validated record can be acted on (FR-006)."""
+
+    ELIGIBLE = "ELIGIBLE"
+    INELIGIBLE = "INELIGIBLE"
+    UNRESOLVED = "UNRESOLVED"
+
+
+class ActionDecision(StrEnum):
+    """The external action a record calls for, if any (BR-007, BR-008)."""
+
+    NONE = "NONE"
+    PAGE_CHANGE = "PAGE_CHANGE"
+    SKIP_IDEMPOTENT = "SKIP_IDEMPOTENT"
+
+
+class ProcessingStatus(StrEnum):
+    """The terminal category one record reached in one execution."""
+
+    REJECTED = "REJECTED"
+    UNRESOLVED = "UNRESOLVED"
+    INELIGIBLE = "INELIGIBLE"
+    UNCHANGED = "UNCHANGED"
+    ACTION_REQUIRED = "ACTION_REQUIRED"
+
+
+@dataclass(frozen=True)
+class RecordIssueEvidence:
+    """One independently queryable reason a record was not processed cleanly.
+
+    Each issue names the rule it came from and a stable code, so rejections
+    and anomalies stay deterministic and can be counted and replayed after a
+    correction (FR-003, FR-006, FR-022).
+    """
+
+    rule_id: str
+    issue_code: str
+    severity: str
+    classification: str
+    evidence: Mapping[str, JSONValue]
+
+    def __post_init__(self) -> None:
+        for name, value in (
+            ("rule_id", self.rule_id),
+            ("issue_code", self.issue_code),
+            ("severity", self.severity),
+            ("classification", self.classification),
+        ):
+            if not value.strip():
+                raise ValueError(f"{name} must not be blank")
+        # Raises rather than redacting, so a leaking caller is fixed at source.
+        sanitize_evidence(dict(self.evidence))
+
+
+@dataclass(frozen=True)
+class RecordProcessingEvidence:
+    """What happened to one canonical record in one execution.
+
+    A record that failed validation or is unresolved never carries an action
+    decision, so quarantined work cannot reach an external effect.
+    """
+
+    key: CanonicalKey
+    validation_status: ValidationStatus
+    eligibility_status: EligibilityStatus
+    promotion_outcome: PromotionOutcome | None
+    current_page: int | None
+    desired_page: int | None
+    action_decision: ActionDecision
+    processing_status: ProcessingStatus
+    issues: tuple[RecordIssueEvidence, ...]
+
+    def __post_init__(self) -> None:
+        blocked = (
+            self.validation_status is ValidationStatus.REJECTED
+            or self.eligibility_status is EligibilityStatus.UNRESOLVED
+        )
+        if blocked and self.action_decision is not ActionDecision.NONE:
+            raise ValueError(
+                "a rejected record or unresolved record requests no action"
+            )
+        if (
+            self.validation_status is ValidationStatus.REJECTED
+            or self.processing_status
+            in (ProcessingStatus.REJECTED, ProcessingStatus.UNRESOLVED)
+        ) and not self.issues:
+            raise ValueError(
+                "a rejected or unresolved record must carry at least one issue"
+            )
