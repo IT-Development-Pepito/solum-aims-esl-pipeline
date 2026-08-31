@@ -351,6 +351,6 @@ class ExecutionRepository:
         statement = (
             select(ExecutionEvent)
             .where(ExecutionEvent.execution_id == execution_id)
-            .order_by(ExecutionEvent.occurred_at, ExecutionEvent.id)
+            .order_by(ExecutionEvent.sequence)
         )
         return list(self._session.scalars(statement))

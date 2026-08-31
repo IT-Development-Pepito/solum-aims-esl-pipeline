@@ -23,6 +23,9 @@ from esl_service.persistence.evidence_repository import (
     RecordOutcomeRepository,
 )
 from esl_service.persistence.models import ConfigurationVersion
+from esl_service.persistence.reconciliation_repository import (
+    ReconciliationRepository,
+)
 from esl_service.persistence.repository import ExecutionRepository
 from esl_service.persistence.snapshot_repository import SnapshotRepository
 
@@ -30,7 +33,7 @@ from esl_service.persistence.snapshot_repository import SnapshotRepository
 FORBIDDEN_DATABASE_NAMES = frozenset({"postgres", "template0", "template1"})
 
 #: Revision the integration suite expects the dedicated database to carry.
-REQUIRED_REVISION = "0006_action_lifecycle"
+REQUIRED_REVISION = "0007_audit_reconciliation"
 
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 
@@ -163,3 +166,10 @@ def action_repository(session: Session) -> ActionRepository:
     """Provide the action ledger repository on the same transaction."""
 
     return ActionRepository(session)
+
+
+@pytest.fixture
+def reconciliation_repository(session: Session) -> ReconciliationRepository:
+    """Provide the audit and reconciliation repository on the same transaction."""
+
+    return ReconciliationRepository(session)
