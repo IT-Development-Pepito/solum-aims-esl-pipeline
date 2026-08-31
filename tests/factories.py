@@ -1,7 +1,8 @@
 """Complete, hand-checked fixtures for canonical domain contract tests."""
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta, timezone
 from decimal import Decimal
+from uuid import UUID, uuid4
 
 from esl_service.domain import (
     CanonicalEslRecord,
@@ -15,6 +16,7 @@ from esl_service.domain import (
     PromotionStateData,
     Provenance,
 )
+from esl_service.domain.outcomes import ExecutionMode, NewExecution, TriggerType
 
 
 def canonical_record(
@@ -80,3 +82,24 @@ def canonical_record(
             source_references=("tb_ESL:084:101024011793",),
         ),
     )
+
+
+def new_execution(
+    configuration_version_id: UUID, **overrides: object
+) -> NewExecution:
+    """Build a complete execution request, overriding only what a test needs."""
+    values: dict[str, object] = {
+        "workflow_name": "sku-shadow",
+        "store_code": "084",
+        "trigger_type": TriggerType.SCHEDULED,
+        "mode": ExecutionMode.SHADOW,
+        "correlation_id": uuid4(),
+        "source_window_start": datetime(2026, 8, 28, 7, 0, tzinfo=UTC),
+        "source_window_end": datetime(2026, 8, 28, 7, 30, tzinfo=UTC),
+        "configuration_version_id": configuration_version_id,
+        "rule_version": "rules-v1",
+        "requested_by": None,
+        "reason": None,
+    }
+    values.update(overrides)
+    return NewExecution(**values)  # type: ignore[arg-type]

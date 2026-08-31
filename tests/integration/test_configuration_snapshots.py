@@ -7,6 +7,7 @@ comparison from durable state rather than CSV files, and BR-018 the
 
 from collections.abc import Sequence
 from decimal import Decimal
+from uuid import UUID
 
 import pytest
 from sqlalchemy import delete, select
@@ -23,24 +24,27 @@ from esl_service.persistence.models import (
 )
 from esl_service.persistence.repository import ExecutionRepository
 from esl_service.persistence.snapshot_repository import SnapshotRepository
-from tests.factories import canonical_record
+from tests.factories import canonical_record, new_execution
 
 WATERMARK = "2026-08-28T07:00:00+00:00"
 
 
 def _create_execution(
-    execution_repository: ExecutionRepository, store_code: str = "084"
+    execution_repository: ExecutionRepository,
+    configuration_version_id: UUID,
+    store_code: str = "084",
 ) -> WorkflowExecution:
     """Create one execution that owns the snapshot evidence under test."""
 
     return execution_repository.create_execution(
-        "sku-shadow", store_code, "2026-08-28T07:00:00+00:00"
+        new_execution(configuration_version_id, store_code=store_code)
     )
 
 
 def _create_snapshot_set(
     snapshot_repository: SnapshotRepository,
     execution_repository: ExecutionRepository,
+    configuration_version_id: UUID,
     *,
     store_code: str = "084",
     representation_kind: str = "SOURCE_EXPECTED",
@@ -48,7 +52,9 @@ def _create_snapshot_set(
 ):
     """Create one snapshot set attached to a fresh execution."""
 
-    execution = _create_execution(execution_repository, store_code)
+    execution = _create_execution(
+        execution_repository, configuration_version_id, store_code
+    )
     return snapshot_repository.create_snapshot_set(
         execution_id=execution.id,
         representation_kind=representation_kind,
@@ -62,10 +68,13 @@ def test_snapshot_round_trip_preserves_complete_record(
     session: Session,
     snapshot_repository: SnapshotRepository,
     execution_repository: ExecutionRepository,
+    configuration_version_id: UUID,
 ) -> None:
     """A persisted snapshot reloads with an identical payload, hash, and key."""
 
-    snapshot_set = _create_snapshot_set(snapshot_repository, execution_repository)
+    snapshot_set = _create_snapshot_set(
+        snapshot_repository, execution_repository, configuration_version_id
+    )
     source = canonical_record()
 
     snapshot_repository.append_record(snapshot_set.id, source)
@@ -85,10 +94,13 @@ def test_snapshot_round_trip_preserves_complete_record(
 def test_snapshot_key_is_unique_per_set(
     snapshot_repository: SnapshotRepository,
     execution_repository: ExecutionRepository,
+    configuration_version_id: UUID,
 ) -> None:
     """One snapshot set cannot hold the same canonical key twice (BR-018)."""
 
-    snapshot_set = _create_snapshot_set(snapshot_repository, execution_repository)
+    snapshot_set = _create_snapshot_set(
+        snapshot_repository, execution_repository, configuration_version_id
+    )
     snapshot_repository.append_record(snapshot_set.id, canonical_record())
 
     with pytest.raises(IntegrityError):
@@ -99,14 +111,15 @@ def test_same_item_and_uom_are_isolated_per_store(
     session: Session,
     snapshot_repository: SnapshotRepository,
     execution_repository: ExecutionRepository,
+    configuration_version_id: UUID,
 ) -> None:
     """The same item and UOM in two stores are separate evidence (FR-026, BR-018)."""
 
     store_075 = _create_snapshot_set(
-        snapshot_repository, execution_repository, store_code="075"
+        snapshot_repository, execution_repository, configuration_version_id, store_code="075"
     )
     store_084 = _create_snapshot_set(
-        snapshot_repository, execution_repository, store_code="084"
+        snapshot_repository, execution_repository, configuration_version_id, store_code="084"
     )
 
     snapshot_repository.append_record(
@@ -127,10 +140,13 @@ def test_same_item_is_isolated_per_selling_uom(
     session: Session,
     snapshot_repository: SnapshotRepository,
     execution_repository: ExecutionRepository,
+    configuration_version_id: UUID,
 ) -> None:
     """One item sold in two UOMs keeps separate canonical rows (BR-018)."""
 
-    snapshot_set = _create_snapshot_set(snapshot_repository, execution_repository)
+    snapshot_set = _create_snapshot_set(
+        snapshot_repository, execution_repository, configuration_version_id
+    )
 
     snapshot_repository.append_record(snapshot_set.id, canonical_record(selling_uom="KGS"))
     snapshot_repository.append_record(snapshot_set.id, canonical_record(selling_uom="PCS"))
@@ -145,6 +161,7 @@ def test_configured_stores_extend_without_a_code_change(
     session: Session,
     snapshot_repository: SnapshotRepository,
     execution_repository: ExecutionRepository,
+    configuration_version_id: UUID,
 ) -> None:
     """A third configured store processes through the same code path (FR-026)."""
 
@@ -166,7 +183,10 @@ def test_configured_stores_extend_without_a_code_change(
 
     for store_code in configured:
         snapshot_set = _create_snapshot_set(
-            snapshot_repository, execution_repository, store_code=store_code
+            snapshot_repository,
+            execution_repository,
+            configuration_version_id,
+            store_code=store_code,
         )
         snapshot_repository.append_record(
             snapshot_set.id, canonical_record(store_code=store_code)
@@ -179,10 +199,11 @@ def test_durable_state_reproduces_the_same_comparison(
     session: Session,
     snapshot_repository: SnapshotRepository,
     execution_repository: ExecutionRepository,
+    configuration_version_id: UUID,
 ) -> None:
     """Reloaded snapshots reproduce the in-memory diff without a CSV file (FR-027)."""
 
-    execution = _create_execution(execution_repository)
+    execution = _create_execution(execution_repository, configuration_version_id)
     expected_set = snapshot_repository.create_snapshot_set(
         execution_id=execution.id,
         representation_kind="SOURCE_EXPECTED",
@@ -238,10 +259,11 @@ def test_snapshot_set_is_unique_per_representation_and_watermark(
     session: Session,
     snapshot_repository: SnapshotRepository,
     execution_repository: ExecutionRepository,
+    configuration_version_id: UUID,
 ) -> None:
     """One execution cannot capture the same representation window twice."""
 
-    execution = _create_execution(execution_repository)
+    execution = _create_execution(execution_repository, configuration_version_id)
     snapshot_repository.create_snapshot_set(
         execution_id=execution.id,
         representation_kind="SOURCE_EXPECTED",
@@ -263,10 +285,13 @@ def test_finalized_snapshot_set_records_count_and_aggregate_hash(
     session: Session,
     snapshot_repository: SnapshotRepository,
     execution_repository: ExecutionRepository,
+    configuration_version_id: UUID,
 ) -> None:
     """Sealing a capture records its size and a deterministic aggregate hash."""
 
-    snapshot_set = _create_snapshot_set(snapshot_repository, execution_repository)
+    snapshot_set = _create_snapshot_set(
+        snapshot_repository, execution_repository, configuration_version_id
+    )
     snapshot_repository.append_record(snapshot_set.id, canonical_record(selling_uom="KGS"))
     snapshot_repository.append_record(snapshot_set.id, canonical_record(selling_uom="PCS"))
 
@@ -305,10 +330,11 @@ def test_execution_with_snapshot_evidence_cannot_be_deleted(
     session: Session,
     snapshot_repository: SnapshotRepository,
     execution_repository: ExecutionRepository,
+    configuration_version_id: UUID,
 ) -> None:
     """Durable evidence uses RESTRICT so audit history survives deletion attempts."""
 
-    execution = _create_execution(execution_repository)
+    execution = _create_execution(execution_repository, configuration_version_id)
     snapshot_set = snapshot_repository.create_snapshot_set(
         execution_id=execution.id,
         representation_kind="SOURCE_EXPECTED",
@@ -330,10 +356,13 @@ def test_snapshot_payload_must_be_a_json_object(
     session: Session,
     snapshot_repository: SnapshotRepository,
     execution_repository: ExecutionRepository,
+    configuration_version_id: UUID,
 ) -> None:
     """The database refuses a canonical payload that is not a JSON object."""
 
-    snapshot_set = _create_snapshot_set(snapshot_repository, execution_repository)
+    snapshot_set = _create_snapshot_set(
+        snapshot_repository, execution_repository, configuration_version_id
+    )
     session.add(
         CanonicalRecordSnapshot(
             snapshot_set_id=snapshot_set.id,
