@@ -51,7 +51,7 @@ a newer one.
 
 # In Progress
 
-- GitHub #42 is producing the focused AD-016 implementation plan; no application or database implementation is authorized in this issue.
+- GitHub #14 implements FR-007 on branch `codex/14-explicit-workflow-states` through commits `53bcf6b`, `b5e1711`, and review correction `36779c0`: a transport-independent workflow contract for explicit execution states, terminal behavior, dependency conditions, deterministic ordering, and auditable transition decisions. The corrected branch-tip gate passes Ruff, mypy (17 source files), pytest (73 passed / 12 database-dependent skips), frontend typecheck, Vitest (1 passed), Vite build, and `git diff --check`. PR #55 has completed independent follow-up review, has green GitHub Actions checks, and is linked to issue #14 through GitHub Development; it is awaiting the final documentation-only check and merge. Persistence and migration integration remain deferred to dependent issue #18; no external system or database was accessed.
 - BR-005 promotion precedence is on hold pending POS/merchandising decision.
 - The GitHub requirement backlog is ready: parent epics #5–#9 and assigned child issues #10–#32. Implement only a selected, unblocked child issue at a time through the issue-led `develop` workflow.
 - Promotion-rule child issues #36 and #37 are ready under epic #5; formal winner priority, same-economic campaign terms, non-CLR conversion, and final weekday policy remain unresolved.
