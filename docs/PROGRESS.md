@@ -51,7 +51,7 @@ a newer one.
 
 # In Progress
 
-- GitHub #42 is producing the focused AD-016 implementation plan; no application or database implementation is authorized in this issue.
+- GitHub #14 is implementing FR-007 as a transport-independent workflow contract for explicit execution states, terminal behavior, dependency conditions, deterministic ordering, and auditable transition decisions. Persistence and migration integration remain deferred to dependent issue #18.
 - BR-005 promotion precedence is on hold pending POS/merchandising decision.
 - The GitHub requirement backlog is ready: parent epics #5–#9 and assigned child issues #10–#32. Implement only a selected, unblocked child issue at a time through the issue-led `develop` workflow.
 - Promotion-rule child issues #36 and #37 are ready under epic #5; formal winner priority, same-economic campaign terms, non-CLR conversion, and final weekday policy remain unresolved.
