@@ -17,6 +17,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session
 
 from alembic import command
+from esl_service.persistence.action_repository import ActionRepository
 from esl_service.persistence.evidence_repository import (
     PromotionEvidenceRepository,
     RecordOutcomeRepository,
@@ -29,7 +30,7 @@ from esl_service.persistence.snapshot_repository import SnapshotRepository
 FORBIDDEN_DATABASE_NAMES = frozenset({"postgres", "template0", "template1"})
 
 #: Revision the integration suite expects the dedicated database to carry.
-REQUIRED_REVISION = "0005_record_outcomes"
+REQUIRED_REVISION = "0006_action_lifecycle"
 
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 
@@ -155,3 +156,10 @@ def outcome_repository(session: Session) -> RecordOutcomeRepository:
     """Provide the record-outcome repository on the same transaction."""
 
     return RecordOutcomeRepository(session)
+
+
+@pytest.fixture
+def action_repository(session: Session) -> ActionRepository:
+    """Provide the action ledger repository on the same transaction."""
+
+    return ActionRepository(session)

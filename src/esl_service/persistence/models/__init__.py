@@ -4,6 +4,7 @@ Every mapped class is re-exported here so ``esl_service.persistence.models``
 stays a stable import path and ``Base.metadata`` remains complete for Alembic.
 """
 
+from esl_service.persistence.models.actions import ActionAttempt
 from esl_service.persistence.models.base import Base
 from esl_service.persistence.models.configuration import (
     ConfigurationVersion,
@@ -28,6 +29,7 @@ from esl_service.persistence.models.execution import (
 from esl_service.persistence.models.outcomes import RecordIssue, RecordProcessingResult
 
 __all__ = [
+    "ActionAttempt",
     "Base",
     "CanonicalRecordSnapshot",
     "ConfigurationVersion",
