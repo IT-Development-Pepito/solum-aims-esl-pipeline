@@ -315,6 +315,8 @@ Exact retention durations are UNKNOWN / NEEDS-DISCOVERY until workload volume, a
 
 Purging requires a terminal execution, finalized reconciliation, no unresolved action, expiry of rollback/audit gates, authorized operation, and an audit entry. Development/staging may have shorter approved durations than production.
 
+**IMPLEMENTED LIMITATION (issue #64).** The implemented purge covers record differences, promotion evaluations and candidates, record issues, execution checkpoints and steps, and detailed events. It does **not** yet remove canonical snapshots, snapshot sets, or record processing results, because `record_action.record_processing_result_id` and `record_processing_result.canonical_record_snapshot_id` are `NOT NULL` with `RESTRICT`: retaining the audit core therefore pins the detailed rows beneath it. Canonical snapshots are the largest class by volume, so most of the storage benefit of retention is unavailable until issue #64 relaxes those two links through an additive migration. Purge remains disabled by default regardless, because no retention duration is approved.
+
 ### 5.9 Constraints, query paths, and scale
 
 Required uniqueness includes one canonical record per snapshot set/business key, one promotion evaluation per snapshot/rule version, one source campaign identity per evaluation, one processing result per execution/business key, one logical action per idempotency key, one current lease owner per scope, and one reconciliation revision number per execution.

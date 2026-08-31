@@ -401,6 +401,12 @@ class Settings(BaseSettings):
     internal_host: str
     shadow_mode: bool = True
     secret_bundle_path: Path = Path(r"C:\ProgramData\SOLUM\ESL\secrets.dpapi")
+    # Retention durations are UNKNOWN / NEEDS-DISCOVERY, so none is defaulted.
+    # Purge stays disabled until the business supplies every applicable value.
+    retention_purge_enabled: bool = False
+    audit_core_days: int | None = None
+    detailed_evidence_days: int | None = None
+    compatibility_days: int | None = None
     service_identity_sid: str = Field(default="", repr=False)
     windows_service_name: str = ""
     program_data_directory_provider_factory: ClassVar[
@@ -412,6 +418,30 @@ class Settings(BaseSettings):
     service_identity_validator_factory: ClassVar[
         Callable[[], ServiceIdentityValidator]
     ] = WindowsServiceIdentityValidator
+
+    @model_validator(mode="after")
+    def validate_retention_configuration(self) -> "Settings":
+        """Refuse an enabled purge that has no explicit retention duration.
+
+        Deleting durable evidence on an assumed period would be a silent data
+        loss, so every applicable duration is mandatory once purge is enabled
+        and none is ever defaulted (architecture 5.8).
+        """
+
+        if not self.retention_purge_enabled:
+            return self
+        for name in (
+            "audit_core_days",
+            "detailed_evidence_days",
+            "compatibility_days",
+        ):
+            value = getattr(self, name)
+            if value is None or value <= 0:
+                raise ValueError(
+                    f"{name} must be a positive number of days when "
+                    "retention_purge_enabled is true"
+                )
+        return self
 
     @model_validator(mode="after")
     def validate_production_security(self) -> "Settings":
