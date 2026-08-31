@@ -12,15 +12,30 @@ actually creates an execution. Refusals are deliberately *not* audited. A
 schedule is evaluated once a minute, so recording every not-due or disabled
 tick would bury the operator actions that FR-022 exists to surface, and the
 enable/disable entry already explains why nothing ran.
+
+Every launch also has to take the workflow and store scope before it may run
+(FR-009, FR-017). The policy lives in :mod:`esl_service.domain.ownership`; the
+lease from #1 enforces it durably. A launch that cannot take the scope creates
+no execution at all, so nothing accumulates that no worker will ever start.
 """
 
-from datetime import datetime
+from dataclasses import dataclass
+from datetime import UTC, datetime
 from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from esl_service.domain.outcomes import ExecutionMode
+from esl_service.domain.outcomes import ExecutionMode, NewExecution, TriggerType
+from esl_service.domain.ownership import (
+    SCOPE_GRANTED,
+    SCOPE_REJECTED,
+    SCOPE_RESOURCE,
+    OwnershipDecision,
+    ScopeOwner,
+    decide_ownership,
+    scope_key,
+)
 from esl_service.domain.scheduling import (
     EXECUTION_RESOURCE,
     SCHEDULE_CREATED,
@@ -29,6 +44,7 @@ from esl_service.domain.scheduling import (
     SCHEDULE_RESOURCE,
     SCHEDULER_ACTOR,
     WORKFLOW_LAUNCHED,
+    LaunchRefusalReason,
     ManualLaunch,
     ScheduleDefinition,
     build_manual_execution,
@@ -36,13 +52,46 @@ from esl_service.domain.scheduling import (
     decide_scheduled_launch,
 )
 from esl_service.domain.serialization import JSONValue
-from esl_service.persistence.models import WorkflowExecution, WorkflowSchedule
+from esl_service.persistence.models import (
+    ScopeLease,
+    WorkflowExecution,
+    WorkflowSchedule,
+)
 from esl_service.persistence.reconciliation_repository import ReconciliationRepository
 from esl_service.persistence.repository import ExecutionRepository
 
 
 class UnknownSchedule(LookupError):
     """Raised when a schedule change names a schedule that does not exist."""
+
+
+class ScopeContention(RuntimeError):
+    """Raised when a scope was taken between the ownership check and the claim.
+
+    The atomic claim, not the check, is the durable guarantee. On the rare
+    occasion the two disagree nothing is created: the execution insert is
+    rolled back to its savepoint and the caller must retry rather than proceed
+    with an execution that owns nothing.
+    """
+
+
+@dataclass(frozen=True)
+class LaunchResult:
+    """Why one launch attempt did or did not create a run.
+
+    At most one refusal field is set when nothing was created, so a caller
+    never has to infer the reason from an absent execution.
+    """
+
+    execution: WorkflowExecution | None
+    schedule_refusal: LaunchRefusalReason | None = None
+    ownership: OwnershipDecision | None = None
+
+    @property
+    def launched(self) -> bool:
+        """Whether this attempt created a run."""
+
+        return self.execution is not None
 
 
 def _definition_of(row: WorkflowSchedule) -> ScheduleDefinition:
@@ -170,12 +219,13 @@ class LaunchRepository:
         source_window_end: datetime,
         configuration_version_id: UUID,
         rule_version: str,
-    ) -> WorkflowExecution | None:
-        """Create the run one schedule is due for, or None when it is not.
+        now: datetime | None = None,
+    ) -> LaunchResult:
+        """Create the run one schedule is due for, if it is due and free.
 
-        None means the domain refused: the schedule is disabled, or the
-        instant is not on its cadence. Both are ordinary outcomes of a
-        per-minute tick rather than errors.
+        Three refusals are ordinary outcomes of a per-minute tick rather than
+        errors: the schedule is disabled, the instant is not on its cadence,
+        or another execution already owns the scope.
         """
 
         schedule = self.get_schedule(schedule_id)
@@ -183,10 +233,11 @@ class LaunchRepository:
             raise UnknownSchedule(f"no schedule with id {schedule_id}")
 
         definition = _definition_of(schedule)
-        if not decide_scheduled_launch(definition, instant).should_launch:
-            return None
+        decision = decide_scheduled_launch(definition, instant)
+        if not decision.should_launch:
+            return LaunchResult(execution=None, schedule_refusal=decision.refusal)
 
-        execution = self._executions.create_execution(
+        return self._launch(
             build_scheduled_execution(
                 definition,
                 mode=mode,
@@ -195,15 +246,12 @@ class LaunchRepository:
                 source_window_end=source_window_end,
                 configuration_version_id=configuration_version_id,
                 rule_version=rule_version,
-            )
-        )
-        self._record_launch(
-            execution,
+            ),
             actor=SCHEDULER_ACTOR,
             reason=f"configured cadence {definition.cron_expression}",
             extra_evidence={"schedule_id": str(schedule.id)},
+            now=now or datetime.now(UTC),
         )
-        return execution
 
     def launch_manual(
         self,
@@ -217,10 +265,16 @@ class LaunchRepository:
         source_window_end: datetime,
         configuration_version_id: UUID,
         rule_version: str,
-    ) -> WorkflowExecution:
-        """Create an operator-initiated run carrying identity and reason."""
+        now: datetime | None = None,
+    ) -> LaunchResult:
+        """Create an operator-initiated run carrying identity and reason.
 
-        execution = self._executions.create_execution(
+        The run is refused when another execution already owns the scope. A
+        manual request does not displace a scheduled owner: the initial policy
+        is no simultaneous ownership and no approved priority exists.
+        """
+
+        return self._launch(
             build_manual_execution(
                 launch,
                 workflow_name=workflow_name,
@@ -231,10 +285,99 @@ class LaunchRepository:
                 source_window_end=source_window_end,
                 configuration_version_id=configuration_version_id,
                 rule_version=rule_version,
-            )
+            ),
+            actor=launch.requested_by,
+            reason=launch.reason,
+            now=now or datetime.now(UTC),
         )
-        self._record_launch(execution, actor=launch.requested_by, reason=launch.reason)
-        return execution
+
+    # --- scope ownership ---------------------------------------------------
+
+    def current_owner(self, scope: str) -> ScopeOwner | None:
+        """Return who currently holds one scope, as the policy sees it.
+
+        The owner's trigger type comes from its execution, so a refusal can
+        say what kind of work it lost to (FR-017).
+        """
+
+        statement = (
+            select(ScopeLease, WorkflowExecution.trigger_type)
+            .join(WorkflowExecution, ScopeLease.execution_id == WorkflowExecution.id)
+            .where(ScopeLease.scope_key == scope)
+        )
+        row = self._session.execute(statement).one_or_none()
+        if row is None:
+            return None
+
+        lease, trigger_type = row
+        return ScopeOwner(
+            execution_id=lease.execution_id,
+            trigger_type=TriggerType(trigger_type),
+            expires_at=lease.expires_at,
+            released=lease.released_at is not None,
+        )
+
+    def _launch(
+        self,
+        request: NewExecution,
+        *,
+        actor: str,
+        reason: str,
+        now: datetime,
+        extra_evidence: dict[str, JSONValue] | None = None,
+    ) -> LaunchResult:
+        """Take the scope, then create and audit the run it authorises."""
+
+        scope = scope_key(request.workflow_name, request.store_code)
+        decision = decide_ownership(
+            scope,
+            request.trigger_type,
+            current=self.current_owner(scope),
+            now=now,
+        )
+        if not decision.granted:
+            self._record_ownership(decision, actor=actor, reason=reason)
+            return LaunchResult(execution=None, ownership=decision)
+
+        # The execution insert is undone if the atomic claim loses a race, so
+        # no run ever exists without owning the scope it was created for.
+        savepoint = self._session.begin_nested()
+        execution = self._executions.create_execution(request)
+        if not self._executions.claim_scope(execution.id, scope, now=now):
+            savepoint.rollback()
+            raise ScopeContention(f"scope {scope} was taken during the launch")
+        savepoint.commit()
+
+        self._record_ownership(decision, actor=actor, reason=reason, execution=execution)
+        self._record_launch(
+            execution, actor=actor, reason=reason, extra_evidence=extra_evidence
+        )
+        return LaunchResult(execution=execution, ownership=decision)
+
+    def _record_ownership(
+        self,
+        decision: OwnershipDecision,
+        *,
+        actor: str,
+        reason: str,
+        execution: WorkflowExecution | None = None,
+    ) -> None:
+        """Audit one ownership decision, its owner, and its outcome (FR-009)."""
+
+        self._audit.append_audit_entry(
+            actor=actor,
+            action=SCOPE_GRANTED if decision.granted else SCOPE_REJECTED,
+            reason=reason,
+            resource_type=SCOPE_RESOURCE,
+            resource_key=decision.scope_key,
+            outcome=decision.outcome.value,
+            execution_id=execution.id if execution else None,
+            configuration_version_id=(
+                execution.configuration_version_id if execution else None
+            ),
+            correlation_id=execution.correlation_id if execution else None,
+            after_evidence=decision.evidence(),
+        )
 
     def _record_launch(
         self,

@@ -103,7 +103,7 @@ This specification is implementation-neutral except where it records an approved
 | FR-014 | Classify failures as retryable, non-retryable, or operator-action-required. | Classification matrix is implemented and tested per dependency. |
 | FR-015 | Apply configured retry limits, bounded exponential backoff with jitter, timeout, and terminal failure handling. | Failure-injection test proves no retry beyond limit and records each attempt. |
 | FR-016 | Recover safely from SQL unavailability, AIMS/API unavailability, network interruption, malformed data, partial completion, application restart, and server restart. | A failure/recovery test exists for each named event. |
-| FR-017 | Define and enforce priority for scheduled versus manual operations on the same scope. | Concurrency test verifies documented policy; initial policy is no simultaneous ownership. |
+| FR-017 | Define and enforce priority for scheduled versus manual operations on the same scope. | Concurrency test verifies documented policy; initial policy is no simultaneous ownership. The initial policy is symmetric: neither a scheduled nor a manual request displaces a live owner, and a contended request is rejected without creating an execution rather than queued. Any preference between the two remains UNKNOWN / NEEDS-DISCOVERY until a business owner approves one. |
 
 ### AIMS, reconciliation, audit, and operations
 

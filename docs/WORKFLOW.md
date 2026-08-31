@@ -139,7 +139,7 @@ Expected implementation outcome: liveness indicates the process is running; read
 3. Record the execution ID in the change/incident ticket.
 4. Monitor until terminal state and perform reconciliation.
 
-The implementation must reject or explicitly queue an overlapping scope; it must not run two owners concurrently.
+The implementation rejects an overlapping scope; it must not run two owners concurrently. A refused launch creates no execution and returns an explicit rejection naming the execution that currently owns the scope and what triggered it, and the decision is recorded in the audit trail. A manual request does not displace a scheduled run, and a scheduled run does not displace a manual one: wait for the owner to finish, or cancel it through the documented graceful-cancel procedure first.
 
 ### Retry a failed run
 
