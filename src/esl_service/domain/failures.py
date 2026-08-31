@@ -20,7 +20,6 @@ from dataclasses import dataclass
 from decimal import Decimal
 from enum import StrEnum
 
-from esl_service.config import Settings
 from esl_service.domain.outcomes import FailureClass
 
 
@@ -164,18 +163,6 @@ class RetryPolicy:
             raise ValueError(
                 "max_backoff_seconds must not be below initial_backoff_seconds"
             )
-
-    @classmethod
-    def from_settings(cls, settings: Settings) -> "RetryPolicy":
-        """Build the policy from externalised configuration (FR-015, FR-025)."""
-
-        return cls(
-            max_attempts=settings.retry_max_attempts,
-            timeout_seconds=settings.retry_timeout_seconds,
-            initial_backoff_seconds=settings.retry_initial_backoff_seconds,
-            max_backoff_seconds=settings.retry_max_backoff_seconds,
-            jitter_ratio=settings.retry_jitter_ratio,
-        )
 
     def should_retry(self, failure_class: FailureClass, attempt: int) -> bool:
         """Return whether another attempt is permitted.

@@ -11,6 +11,7 @@ from typing import ClassVar, Literal, NoReturn, Protocol
 from pydantic import Field, ValidationError, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from esl_service.domain.failures import RetryPolicy
 from esl_service.domain.serialization import JSONValue, canonical_hash
 
 
@@ -595,3 +596,21 @@ class _ConfigurationSnapshot:
     """Typed carrier so the canonical serializer keeps refusing raw mappings."""
 
     entries: tuple[tuple[str, JSONValue], ...]
+
+
+def build_retry_policy(settings: Settings) -> RetryPolicy:
+    """Build the retry policy from externalised configuration (FR-015, FR-025).
+
+    This lives with configuration rather than with the policy itself so the
+    domain stays free of ``Settings``: rules must be exercisable without an
+    environment, and configuration may depend on the domain but never the
+    reverse (FR-018).
+    """
+
+    return RetryPolicy(
+        max_attempts=settings.retry_max_attempts,
+        timeout_seconds=settings.retry_timeout_seconds,
+        initial_backoff_seconds=settings.retry_initial_backoff_seconds,
+        max_backoff_seconds=settings.retry_max_backoff_seconds,
+        jitter_ratio=settings.retry_jitter_ratio,
+    )
