@@ -1,0 +1,8 @@
+- **Timestamp / owner:** 2026-08-31 20:50 +08:00; Codex issue #66 documentation clarification.
+- **Issue:** GitHub #66, [docs] reconcile progress summary after merged foundation work, assigned to it20pepito; labels type:docs, area:docs, priority:p1. PR #67 is open against `develop`.
+- **Git state:** `codex/66-reconcile-progress-summary` in `D:\Documents\Dev\solum-aims-esl-pipeline\.worktrees\issue-66-reconcile-progress-summary`; prior commit `7d92e52`; `docs/PROGRESS.md` is modified and this new checkpoint is untracked.
+- **Scope:** Renamed the summary section from `In Progress` to `Open Work / Blockers` and corrected the next-action sequencing after verifying #21. Non-goals: no implementation, migration, configuration, business-rule, or external-system changes.
+- **Evidence:** GitHub issue #21 is open and depends on #18, #20, and adapters #11 and #22–#24. PR #67's two `verify` checks passed before this clarification; `git diff --check` passes locally.
+- **Configuration:** None read or changed; no secret, connection string, or DPAPI material exposed.
+- **External state:** Read GitHub issue and PR status only. No PostgreSQL, SQL Server, AIMS, Jenkins, Hop, CSV-delivery, ESL-device, or production state accessed or changed.
+- **Risks / next action:** The new commit will rerun PR verification; a non-authoring cross-agent review comment and the GitHub Development-sidebar link remain required before merging. Next action: commit, push, and recheck PR #67.

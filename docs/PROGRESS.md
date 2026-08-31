@@ -57,13 +57,13 @@ a newer one.
 - Implemented and independently reviewed Task 1: Python/React/Tailwind project scaffold and CI.
 - Implemented and independently reviewed Task 2: validated settings and the production DPAPI secret boundary, including Windows Service identity, known-folder, owner, and ACL safeguards.
 
-# In Progress
+# Open Work / Blockers
 
 - BR-005 promotion precedence is on hold pending POS/merchandising decision.
 - The GitHub requirement backlog and its later follow-on issues are assigned and tracked through the issue-led `develop` workflow. Implement only a selected, unblocked issue at a time.
 - Promotion-rule issue #37 remains open. Its #36 candidate-state and #25 audit/reconciliation prerequisites are complete; it must retain unresolved ambiguity rather than invent winner priority. #38 and representative cases remain required before any deployed-compatibility claim.
 - P0 issue #38 blocks source-adapter parity until SQL-owner review removes or explains the direct procedure self-invocation and supplies non-production boundary evidence.
-- P2 issue #58 is blocked until merchandising/POS and data owners provide configured range/domain thresholds and severity policy. P2 issue #64 is blocked until AD-016 Task 8 resolves the next migration slot.
+- P2 issue #58 is blocked until merchandising/POS and data owners provide configured range/domain thresholds and severity policy. P1 issue #21 remains blocked by #20 and the unimplemented adapters in #11 and #22–#24; P2 issue #64 follows only after #21 resolves the reserved migration slot.
 - Discovery of the unknown operational and business contracts listed below.
 
 # Next
@@ -74,7 +74,7 @@ a newer one.
 4. Obtain SOLUM-supported API documentation and decide the retirement path for compatibility reads.
 5. Confirm promotion precedence, same-economic campaign terms, non-CLR UOM conversion, and final weekday-metadata policy.
 6. Measure workload, schedule, latency, failure, and recovery baselines.
-7. Maintain the AD-016 migration sequence: Task 8 / #21 owns the reserved `0008` authoritative-model-gate migration; issue #64 follows only after that slot is resolved. Issue #37 consumes the completed #25 evidence after Task 8; do not claim deployed compatibility until #38 and representative parity cases are complete.
+7. Do not select Task 8 / #21 until #20 and its SQL/AIMS/network adapter dependencies (#11 and #22–#24) are complete. Then preserve #21's reserved `0008` authoritative-model-gate migration before #64; evaluate #37 only after Task 8. Do not claim deployed compatibility until #38 and representative parity cases are complete.
 
 # Decisions Made
 
