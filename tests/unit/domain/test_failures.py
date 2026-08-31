@@ -12,7 +12,7 @@ from decimal import Decimal
 
 import pytest
 
-from esl_service.config import Settings
+from esl_service.config import Settings, build_retry_policy
 from esl_service.domain.failures import (
     DependencyKind,
     FailureKind,
@@ -237,7 +237,7 @@ def settings(**overrides: object) -> Settings:
 def test_policy_is_built_from_externalised_configuration() -> None:
     """Retry behaviour is configuration, not a code constant (FR-015)."""
 
-    configured = RetryPolicy.from_settings(
+    configured = build_retry_policy(
         settings(retry_max_attempts=5, retry_timeout_seconds=Decimal(45))
     )
     assert configured.max_attempts == 5
