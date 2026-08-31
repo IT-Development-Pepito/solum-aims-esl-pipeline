@@ -11,6 +11,8 @@ from esl_service.persistence.models.configuration import (
 )
 from esl_service.persistence.models.evidence import (
     CanonicalRecordSnapshot,
+    PromotionCandidateSnapshot,
+    PromotionEvaluation,
     RecordDifference,
     SnapshotSet,
 )
@@ -31,6 +33,8 @@ __all__ = [
     "ExecutionCheckpoint",
     "ExecutionEvent",
     "ExecutionStep",
+    "PromotionCandidateSnapshot",
+    "PromotionEvaluation",
     "RecordAction",
     "RecordDifference",
     "ScopeLease",

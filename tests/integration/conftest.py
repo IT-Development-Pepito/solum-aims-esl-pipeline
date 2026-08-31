@@ -17,6 +17,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session
 
 from alembic import command
+from esl_service.persistence.evidence_repository import PromotionEvidenceRepository
 from esl_service.persistence.models import ConfigurationVersion
 from esl_service.persistence.repository import ExecutionRepository
 from esl_service.persistence.snapshot_repository import SnapshotRepository
@@ -25,7 +26,7 @@ from esl_service.persistence.snapshot_repository import SnapshotRepository
 FORBIDDEN_DATABASE_NAMES = frozenset({"postgres", "template0", "template1"})
 
 #: Revision the integration suite expects the dedicated database to carry.
-REQUIRED_REVISION = "0003_execution_recovery"
+REQUIRED_REVISION = "0004_promotion_evidence"
 
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 
@@ -137,3 +138,10 @@ def configuration_version_id(session: Session) -> UUID:
     session.add(version)
     session.flush()
     return version.id
+
+
+@pytest.fixture
+def promotion_repository(session: Session) -> PromotionEvidenceRepository:
+    """Provide the promotion-evidence repository on the same transaction."""
+
+    return PromotionEvidenceRepository(session)
