@@ -25,6 +25,7 @@ from esl_service.persistence.models.execution import (
     WorkflowExecution,
     WorkflowSchedule,
 )
+from esl_service.persistence.models.outcomes import RecordIssue, RecordProcessingResult
 
 __all__ = [
     "Base",
@@ -37,6 +38,8 @@ __all__ = [
     "PromotionEvaluation",
     "RecordAction",
     "RecordDifference",
+    "RecordIssue",
+    "RecordProcessingResult",
     "ScopeLease",
     "SnapshotSet",
     "StoreConfiguration",

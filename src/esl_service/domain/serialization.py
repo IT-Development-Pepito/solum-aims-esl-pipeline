@@ -1,4 +1,4 @@
-"""Deterministic JSON-compatible canonical payload and hash functions."""
+"""Deterministic canonical payloads, hashes, and secret-safe evidence."""
 
 import hashlib
 import json
@@ -46,3 +46,37 @@ def _json_value(value: object) -> JSONValue:
     if value is None or isinstance(value, (str, int, bool)):
         return value
     raise TypeError(f"unsupported canonical value: {type(value).__name__}")
+
+
+#: Key fragments that may never appear in persisted evidence (NFR-009).
+FORBIDDEN_EVIDENCE_KEY_FRAGMENTS = (
+    "password",
+    "passwd",
+    "secret",
+    "token",
+    "authorization",
+    "connection_string",
+    "database_url",
+    "dpapi",
+)
+
+
+def sanitize_evidence(value: JSONValue) -> JSONValue:
+    """Return evidence unchanged, refusing any secret-like key.
+
+    Diagnostic evidence is persisted and shown to operators, so a credential
+    must never reach it. The check is recursive and case-insensitive, and it
+    raises rather than redacting so the caller fixes the source of the leak
+    instead of shipping a silently truncated record.
+    """
+
+    if isinstance(value, dict):
+        for key in value:
+            lowered = key.casefold()
+            for fragment in FORBIDDEN_EVIDENCE_KEY_FRAGMENTS:
+                if fragment in lowered:
+                    raise ValueError(f"forbidden evidence key: {key}")
+        return {key: sanitize_evidence(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [sanitize_evidence(item) for item in value]
+    return value
