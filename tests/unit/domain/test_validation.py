@@ -308,3 +308,46 @@ def test_changed_page_requires_an_action() -> None:
     )
     assert result.processing_status is ProcessingStatus.ACTION_REQUIRED
     assert result.action_decision is ActionDecision.PAGE_CHANGE
+
+
+# --- BR-019 ambiguity codes reach the record issue trail (#37) --------------
+
+
+def test_ambiguity_codes_are_traced_to_br_019() -> None:
+    """The two BR-019 codes must not fall back to the default rule id."""
+
+    from esl_service.domain.promotion_selection import (
+        REASON_DISPLAY_PRIORITY_SAME_ECONOMIC,
+        REASON_PROMO_PRIORITY_DIFFERENT_ECONOMIC,
+        select_compatibility_state,
+    )
+
+    evaluation = select_compatibility_state(
+        evaluation_of(
+            campaign(campaign_id="A", structured_value=Decimal(50)),
+            campaign(campaign_id="B", structured_value=Decimal(40)),
+        )
+    )
+    by_code = {item.issue_code: item for item in promotion_issues(evaluation)}
+
+    assert by_code[REASON_PROMO_PRIORITY_DIFFERENT_ECONOMIC].rule_id == "BR-019"
+    assert REASON_DISPLAY_PRIORITY_SAME_ECONOMIC not in by_code
+
+
+def test_same_economic_ambiguity_code_is_traced_to_br_019() -> None:
+    """The display-priority code is equally traceable for review."""
+
+    from esl_service.domain.promotion_selection import (
+        REASON_DISPLAY_PRIORITY_SAME_ECONOMIC,
+        select_compatibility_state,
+    )
+
+    evaluation = select_compatibility_state(
+        evaluation_of(
+            campaign(campaign_id="A", raw_disc_text="DISC 50%|LIMIT 2"),
+            campaign(campaign_id="B", raw_disc_text="DISC 50%|LIMIT 12"),
+        )
+    )
+    by_code = {item.issue_code: item for item in promotion_issues(evaluation)}
+
+    assert by_code[REASON_DISPLAY_PRIORITY_SAME_ECONOMIC].rule_id == "BR-019"

@@ -53,6 +53,9 @@ _PROMOTION_RULE_BY_CODE = {
     "UOM_RULE_REQUIRED": "BR-013",
     "VALUE_BASED_CONVERSION_REQUIRED": "BR-014",
     "MISSING_WEEKDAY_METADATA": "BR-017",
+    # Ambiguity classifications produced by the #37 compatibility strategy.
+    "PROMO_PRIORITY_DIFFERENT_ECONOMIC": "BR-019",
+    "DISPLAY_PRIORITY_SAME_ECONOMIC": "BR-019",
 }
 
 
