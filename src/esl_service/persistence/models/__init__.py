@@ -15,7 +15,9 @@ from esl_service.persistence.models.evidence import (
     SnapshotSet,
 )
 from esl_service.persistence.models.execution import (
+    ExecutionCheckpoint,
     ExecutionEvent,
+    ExecutionStep,
     RecordAction,
     ScopeLease,
     WorkflowExecution,
@@ -26,7 +28,9 @@ __all__ = [
     "Base",
     "CanonicalRecordSnapshot",
     "ConfigurationVersion",
+    "ExecutionCheckpoint",
     "ExecutionEvent",
+    "ExecutionStep",
     "RecordAction",
     "RecordDifference",
     "ScopeLease",

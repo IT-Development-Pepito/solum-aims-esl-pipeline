@@ -1,43 +1,27 @@
-"""Integration coverage for durable workflow-state persistence (FR-017)."""
+"""Integration coverage for durable workflow-state persistence (FR-017).
 
-import os
-from collections.abc import Iterator
+Uses the shared migrated-database fixtures in ``conftest.py`` so this module
+exercises the same schema revision as the rest of the integration suite.
+"""
 
-import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.orm import Session
+from uuid import UUID
 
 from esl_service.persistence.repository import ExecutionRepository
-
-
-@pytest.fixture
-def repository() -> Iterator[ExecutionRepository]:
-    """Provide a real repository whose state is rolled back after the test."""
-
-    database_url = os.environ.get("ESL_TEST_DATABASE_URL")
-    if database_url is None:
-        pytest.skip("ESL_TEST_DATABASE_URL is required for PostgreSQL integration tests")
-    engine = create_engine(database_url)
-    connection = engine.connect()
-    transaction = connection.begin()
-    session = Session(bind=connection)
-    try:
-        yield ExecutionRepository(session)
-    finally:
-        session.close()
-        if transaction.is_active:
-            transaction.rollback()
-        connection.close()
-        engine.dispose()
+from tests.factories import new_execution
 
 
 def test_only_one_execution_claims_store_scope(
-    repository: ExecutionRepository,
+    execution_repository: ExecutionRepository,
+    configuration_version_id: UUID,
 ) -> None:
     """An overlapping execution cannot claim an already leased store scope."""
 
-    first = repository.create_execution("sku-shadow", "084", "2026-08-25T07:00:00Z")
-    assert repository.claim_scope(first.id, "sku-shadow:084") is True
+    first = execution_repository.create_execution(
+        new_execution(configuration_version_id)
+    )
+    assert execution_repository.claim_scope(first.id, "sku-shadow:084") is True
 
-    second = repository.create_execution("sku-shadow", "084", "2026-08-25T07:00:00Z")
-    assert repository.claim_scope(second.id, "sku-shadow:084") is False
+    second = execution_repository.create_execution(
+        new_execution(configuration_version_id)
+    )
+    assert execution_repository.claim_scope(second.id, "sku-shadow:084") is False

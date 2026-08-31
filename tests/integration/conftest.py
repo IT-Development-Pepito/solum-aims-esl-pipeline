@@ -8,6 +8,7 @@ test, and roll back every row a test creates.
 import os
 from collections.abc import Iterator
 from pathlib import Path
+from uuid import UUID
 
 import pytest
 from alembic.config import Config
@@ -16,6 +17,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session
 
 from alembic import command
+from esl_service.persistence.models import ConfigurationVersion
 from esl_service.persistence.repository import ExecutionRepository
 from esl_service.persistence.snapshot_repository import SnapshotRepository
 
@@ -23,7 +25,7 @@ from esl_service.persistence.snapshot_repository import SnapshotRepository
 FORBIDDEN_DATABASE_NAMES = frozenset({"postgres", "template0", "template1"})
 
 #: Revision the integration suite expects the dedicated database to carry.
-REQUIRED_REVISION = "0002_configuration_and_snapshots"
+REQUIRED_REVISION = "0003_execution_recovery"
 
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 
@@ -119,3 +121,19 @@ def snapshot_repository(session: Session) -> SnapshotRepository:
     """Provide the canonical-snapshot repository against the same transaction."""
 
     return SnapshotRepository(session)
+
+
+@pytest.fixture
+def configuration_version_id(session: Session) -> UUID:
+    """Every execution references exactly one configuration version (FR-025)."""
+
+    version = ConfigurationVersion(
+        environment="development",
+        schema_version="config-v1",
+        content_hash="c" * 64,
+        sanitized_snapshot={"stores": ["075", "084"]},
+        activated_by="test",
+    )
+    session.add(version)
+    session.flush()
+    return version.id
