@@ -1,6 +1,6 @@
 # Current Phase
 
-The **engineering phase began on 2026-08-25** after the dedicated local non-production PostgreSQL test connection was verified. Foundation workflow, validation, promotion-evidence, action-lifecycle, audit/reconciliation, health/configuration, and safe retention/audit-read work through PR #65 are merged into `develop`. The automated CSV compatibility contract remains approved but its follow-on implementation is deferred until its foundation dependencies and the consumer acceptance gate are complete.
+The **engineering phase began on 2026-08-25** after the dedicated local non-production PostgreSQL test connection was verified. Foundation workflow, validation, promotion-evidence, action-lifecycle, audit/reconciliation, health/configuration, safe retention/audit-read, promotion compatibility selection, failure classification and bounded retry, AIMS adapter boundaries, recurring schedules with auditable manual launch, and per-scope launch ownership work through PR #73 are merged into `develop`. The automated CSV compatibility contract remains approved but its follow-on implementation is deferred until its foundation dependencies and the consumer acceptance gate are complete.
 
 
 ## Cross-agent implementation checkpoints
@@ -47,6 +47,11 @@ a newer one.
 - GitHub #25 merged through PR #61 at 422a072: reconciliation balance validation plus durable audit, exception, and event evidence.
 - GitHub #27 merged through PR #63 at 61aabcb: liveness/readiness/dependency health and versioned configuration validation. Its GitHub scope differed from the AD-016 Task 7 assignment, so the plan's retention and audit-read work was separately tracked rather than silently folded into #27.
 - GitHub #62 merged through PR #65 at 6ba029f: disabled-by-default configurable evidence retention guards and sanitized audit read models, completing the remaining AD-016 Task 7 work. Its identified foreign-key purge limitation is tracked by blocked issue #64, after the Task 8 migration slot is resolved.
+- GitHub #37 merged through PR #69 at 873202e: the versioned `compatibility-v1` promotion selection strategy and its two BR-019 ambiguity reason codes, mapped into the record-issue trail. No campaign winner is invented, and deployed parity remains unclaimed pending #38 and representative cases.
+- GitHub #20 merged through PR #70 at 7b2c717: the SYSTEM_ARCHITECTURE section 8 failure classification matrix and a bounded retry policy with externalised attempts, timeout, backoff, and jitter, recorded in the sanitized configuration snapshot. An unrecognised dependency and failure pair raises rather than defaulting.
+- GitHub #22 merged through PR #71 at 35c2986: FR-018 AIMS adapter ports in `application/contracts.py` with typed outcomes for reconciliation and retry, plus AST-based architecture tests that reject direct AIMS implementation imports. Those tests caught and corrected a real domain-to-configuration layering inversion introduced by #20.
+- GitHub #15 merged through PR #72 at cc964f4: FR-008 configured recurring cadences evaluated to the minute in each schedule's own timezone, enable/disable control, and manual launch carrying operator identity and reason, with schedule configuration, enable/disable changes, and launch source all audit-visible.
+- GitHub #17 merged through PR #73 at 902a77a: FR-009 and FR-017 per-scope ownership taken at launch under the versioned `no-simultaneous-ownership-v1` policy. A contended launch is rejected and creates no execution, and neither a scheduled nor a manual request displaces a live owner.
 - AD-016 Task 2 merged through PR #45 at 4ce8eba, closing #13: configuration, canonical snapshot, and difference persistence with additive migration 0002_configuration_and_snapshots. GitHub Actions verified the branch (Ruff, mypy for 16 source files, pytest 55 passed / 12 skipped without a configured test database, frontend typecheck, Vitest, and Vite build). The same suite reports 67 passed with no skip against the dedicated non-production database, which now rests at 0002.
 - Approved authoritative data model merged through PR #41 at 1d1ca8d; root develop is synchronized and post-merge verification passed.
 - Inspected all supplied current-system evidence under `docs/sql-server/` and `docs/hop-jenkins-pipeline/`.
@@ -61,7 +66,7 @@ a newer one.
 
 - BR-005 promotion precedence is on hold pending POS/merchandising decision.
 - The GitHub requirement backlog and its later follow-on issues are assigned and tracked through the issue-led `develop` workflow. Implement only a selected, unblocked issue at a time.
-- Promotion-rule issue #37 is merged, but it deliberately retains unresolved ambiguity rather than inventing winner priority. #38 and representative cases remain required before any deployed-compatibility claim. The Completed list above is behind by the merged #37, #20, and #22; reconciling it is a documentation task, not a code gap.
+- Promotion-rule issue #37 is merged, but it deliberately retains unresolved ambiguity rather than inventing winner priority. #38 and representative cases remain required before any deployed-compatibility claim.
 - P0 issue #38 blocks source-adapter parity until SQL-owner review removes or explains the direct procedure self-invocation and supplies non-production boundary evidence.
 - P2 issue #58 is blocked until merchandising/POS and data owners provide configured range/domain thresholds and severity policy. P1 issue #21 remains blocked by the unimplemented adapters in #11, #23, and #24; #20 and the #22 adapter ports are complete. P2 issue #64 follows only after #21 resolves the reserved migration slot.
 - Retry limits, timeout, backoff bounds, and jitter ratio shipped with #20 are **provisional operational defaults**, not measured targets. NFR-004 requires each target to come from a measured baseline and no workload baseline has been captured, so these values must be reviewed against measured latency and failure data before production acceptance.
@@ -84,7 +89,8 @@ a newer one.
 4. Obtain SOLUM-supported API documentation and decide the retirement path for compatibility reads.
 5. Confirm promotion precedence, same-economic campaign terms, non-CLR UOM conversion, and final weekday-metadata policy.
 6. Measure workload, schedule, latency, failure, and recovery baselines.
-7. Do not select Task 8 / #21 until #20 and its SQL/AIMS/network adapter dependencies (#11 and #22–#24) are complete. Then preserve #21's reserved `0008` authoritative-model-gate migration before #64; evaluate #37 only after Task 8. Do not claim deployed compatibility until #38 and representative parity cases are complete.
+7. Do not select Task 8 / #21 until its remaining adapter dependencies #11, #23, and #24 are complete; #20 and the #22 ports are done. Then preserve #21's reserved `0008` authoritative-model-gate migration before #64. #37 is merged, but its deployed-parity evaluation still follows Task 8, and deployed compatibility must not be claimed until #38 and representative parity cases are complete.
+8. #16 is the only unblocked P1 remaining in epic #6 and is the next implementable issue; it and #28 together unblock #26. Every other unimplemented issue carries the `blocked` label and a named dependency.
 
 # Decisions Made
 
