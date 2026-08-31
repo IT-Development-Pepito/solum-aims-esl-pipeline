@@ -1,6 +1,7 @@
 """SQLAlchemy models for workflow execution state and audit records."""
 
 from datetime import datetime
+from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
@@ -21,6 +22,9 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from esl_service.persistence.models.base import Base
 from esl_service.persistence.models.configuration import HASH_LENGTH
+
+if TYPE_CHECKING:
+    from esl_service.persistence.models.actions import ActionAttempt
 
 
 class WorkflowExecution(Base):
@@ -146,9 +150,47 @@ class ExecutionEvent(Base):
 
 
 class RecordAction(Base):
-    """One intended or completed record-level action in an execution."""
+    """The durable logical ledger of one external action (architecture 5.6).
+
+    ``idempotency_key`` is globally unique, so a retry or restart resolves to
+    the same row instead of duplicating an effect. A shadow execution may hold
+    only INTENDED or SKIPPED_IDEMPOTENT, enforced here and in the domain.
+    """
 
     __tablename__ = "record_action"
+    __table_args__ = (
+        UniqueConstraint("idempotency_key", name="uq_record_action_idempotency_key"),
+        CheckConstraint(
+            f"char_length(idempotency_key) = {HASH_LENGTH}",
+            name="ck_record_action_idempotency_key_length",
+        ),
+        CheckConstraint(
+            "request_hash IS NULL OR "
+            f"char_length(request_hash) = {HASH_LENGTH}",
+            name="ck_record_action_request_hash_length",
+        ),
+        CheckConstraint(
+            "state IN ('INTENDED', 'SKIPPED_IDEMPOTENT', 'SUBMITTING', "
+            "'ACKNOWLEDGED', 'REJECTED', 'FAILED_RETRYABLE', 'FAILED_TERMINAL', "
+            "'OUTCOME_UNKNOWN')",
+            name="ck_record_action_state",
+        ),
+        CheckConstraint("mode IN ('SHADOW', 'ACTIVE')", name="ck_record_action_mode"),
+        # A shadow run must never record a submitted or acknowledged effect.
+        CheckConstraint(
+            "mode = 'ACTIVE' OR state IN ('INTENDED', 'SKIPPED_IDEMPOTENT')",
+            name="ck_record_action_shadow_states",
+        ),
+        CheckConstraint(
+            "desired_page IS NULL OR desired_page >= 0",
+            name="ck_record_action_desired_page",
+        ),
+        Index("ix_record_action_execution", "execution_id"),
+        Index("ix_record_action_state", "state"),
+        Index(
+            "ix_record_action_business_key", "store_code", "item_code", "selling_uom"
+        ),
+    )
 
     id: Mapped[UUID] = mapped_column(
         PostgreSQLUUID(as_uuid=True), primary_key=True, default=uuid4
@@ -158,11 +200,53 @@ class RecordAction(Base):
         ForeignKey("workflow_execution.id", ondelete="RESTRICT"),
         nullable=False,
     )
+    record_processing_result_id: Mapped[UUID] = mapped_column(
+        PostgreSQLUUID(as_uuid=True),
+        ForeignKey("record_processing_result.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    store_code: Mapped[str] = mapped_column(String(20), nullable=False)
+    item_code: Mapped[str] = mapped_column(String(50), nullable=False)
+    selling_uom: Mapped[str] = mapped_column(String(20), nullable=False)
     record_key: Mapped[str] = mapped_column(String(200), nullable=False)
+    label_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
     action_type: Mapped[str] = mapped_column(String(100), nullable=False)
+    desired_page: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    desired_state: Mapped[str] = mapped_column(String(100), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(HASH_LENGTH), nullable=False)
+    request_hash: Mapped[str | None] = mapped_column(
+        String(HASH_LENGTH), nullable=True
+    )
+    state: Mapped[str] = mapped_column(String(32), nullable=False)
+    mode: Mapped[str] = mapped_column(String(10), nullable=False)
+    contract_version: Mapped[str] = mapped_column(String(50), nullable=False)
+    rule_version: Mapped[str] = mapped_column(String(50), nullable=False)
+    configuration_hash: Mapped[str] = mapped_column(String(HASH_LENGTH), nullable=False)
+    source_window_start: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    source_window_end: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    acknowledgement_batch_id: Mapped[str | None] = mapped_column(
+        String(100), nullable=True
+    )
     payload: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False)
     occurred_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+    terminal_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    attempts: Mapped[list["ActionAttempt"]] = relationship(
+        back_populates="action", order_by="ActionAttempt.attempt_number"
     )
 
 

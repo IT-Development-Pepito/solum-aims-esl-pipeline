@@ -15,6 +15,7 @@ from sqlalchemy import CursorResult, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session, selectinload
 
+from esl_service.domain.actions import NewRecordAction
 from esl_service.domain.outcomes import FailureClass, NewExecution
 from esl_service.domain.workflow import (
     ExecutionStatus,
@@ -332,24 +333,17 @@ class ExecutionRepository:
         self._session.flush()
         return event
 
-    def record_action(
-        self,
-        execution_id: UUID,
-        record_key: str,
-        action_type: str,
-        payload: Mapping[str, object],
-    ) -> RecordAction:
-        """Record a durable record-level action for later reconciliation."""
+    def record_action(self, request: NewRecordAction) -> RecordAction:
+        """Record an intended external action, idempotently by its logical key.
 
-        action = RecordAction(
-            execution_id=execution_id,
-            record_key=record_key,
-            action_type=action_type,
-            payload=dict(payload),
-        )
-        self._session.add(action)
-        self._session.flush()
-        return action
+        Forwards to :class:`~esl_service.persistence.action_repository.
+        ActionRepository` for one release. The action ledger belongs there, and
+        this shim is removed by its own issue once callers have moved.
+        """
+
+        from esl_service.persistence.action_repository import ActionRepository
+
+        return ActionRepository(self._session).create_intended(request)
 
     def list_events(self, execution_id: UUID) -> list[ExecutionEvent]:
         """Return events in their database occurrence order for an execution."""
