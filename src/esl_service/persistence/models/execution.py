@@ -5,10 +5,12 @@ from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Identity,
     Index,
     Integer,
     String,
@@ -141,6 +143,10 @@ class ExecutionEvent(Base):
         PostgreSQLUUID(as_uuid=True),
         ForeignKey("workflow_execution.id", ondelete="RESTRICT"),
         nullable=False,
+    )
+    # Monotonic insertion order, for the same reason as audit_entry.
+    sequence: Mapped[int] = mapped_column(
+        BigInteger, Identity(always=False), nullable=False, unique=True
     )
     event_type: Mapped[str] = mapped_column(String(100), nullable=False)
     payload: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False)

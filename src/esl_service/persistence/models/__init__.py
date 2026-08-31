@@ -27,9 +27,15 @@ from esl_service.persistence.models.execution import (
     WorkflowSchedule,
 )
 from esl_service.persistence.models.outcomes import RecordIssue, RecordProcessingResult
+from esl_service.persistence.models.reconciliation import (
+    AuditEntry,
+    ReconciliationException,
+    ReconciliationReport,
+)
 
 __all__ = [
     "ActionAttempt",
+    "AuditEntry",
     "Base",
     "CanonicalRecordSnapshot",
     "ConfigurationVersion",
@@ -38,6 +44,8 @@ __all__ = [
     "ExecutionStep",
     "PromotionCandidateSnapshot",
     "PromotionEvaluation",
+    "ReconciliationException",
+    "ReconciliationReport",
     "RecordAction",
     "RecordDifference",
     "RecordIssue",
