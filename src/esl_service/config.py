@@ -2,13 +2,15 @@
 
 import ctypes
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import ClassVar, Literal, NoReturn, Protocol
 
-from pydantic import Field, model_validator
+from pydantic import Field, ValidationError, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from esl_service.domain.serialization import JSONValue, canonical_hash
 
 
 class _Guid(ctypes.Structure):
@@ -443,3 +445,93 @@ class Settings(BaseSettings):
         validator = type(self).secret_bundle_path_validator_factory()
         validator.validate(canonical_bundle_path, normalized_service_sid)
         return self
+
+
+#: Version of the sanitized configuration snapshot shape.
+CONFIGURATION_SCHEMA_VERSION = "configuration-v1"
+
+#: Settings excluded from a configuration version because they carry, or point
+#: at, a secret or a host-specific location rather than business configuration.
+SECRET_BEARING_SETTINGS = frozenset({"database_url", "secret_bundle_path"})
+
+
+@dataclass(frozen=True)
+class ConfigurationProblem:
+    """One startup configuration fault, named without its value."""
+
+    key: str
+    message: str
+
+    def __post_init__(self) -> None:
+        if not self.key.strip():
+            raise ValueError("key must not be blank")
+
+
+def describe_configuration_problems(
+    error: "ValidationError",
+) -> tuple[ConfigurationProblem, ...]:
+    """Convert a validation error into key-only problems (FR-025, NFR-009).
+
+    Pydantic's error payload includes the rejected input, which for a database
+    URL is a credential. Only the key path and the validator's own message are
+    kept, and the message is used verbatim only because it never contains the
+    input value.
+    """
+
+    problems = {
+        ConfigurationProblem(
+            key=".".join(str(part) for part in item["loc"]) or "configuration",
+            message=str(item["msg"]),
+        )
+        for item in error.errors()
+    }
+    return tuple(sorted(problems, key=lambda problem: problem.key))
+
+
+def validate_startup_configuration(
+    values: Mapping[str, object],
+) -> tuple["Settings | None", tuple[ConfigurationProblem, ...]]:
+    """Validate configuration at startup, reporting faults by key only.
+
+    Returns the settings when valid, or ``None`` with the problems that must be
+    corrected. Invalid configuration prevents readiness rather than allowing a
+    partially configured service to accept work.
+    """
+
+    try:
+        return Settings.model_validate(dict(values)), ()
+    except ValidationError as error:
+        return None, describe_configuration_problems(error)
+
+
+def sanitized_configuration_snapshot(settings: Settings) -> dict[str, JSONValue]:
+    """Return the secret-free, versioned snapshot of an active configuration.
+
+    This is the content a ``configuration_version`` row records, so every
+    execution can name the exact configuration it ran under (FR-002, FR-025).
+    Rotating a credential does not change it, because secret-bearing settings
+    are excluded entirely.
+    """
+
+    snapshot: dict[str, JSONValue] = {
+        "configuration_schema_version": CONFIGURATION_SCHEMA_VERSION
+    }
+    for name in sorted(type(settings).model_fields):
+        if name in SECRET_BEARING_SETTINGS:
+            continue
+        value = getattr(settings, name)
+        snapshot[name] = value if isinstance(value, bool | int | str) else str(value)
+    return snapshot
+
+
+def configuration_content_hash(snapshot: Mapping[str, JSONValue]) -> str:
+    """Return the deterministic content hash identifying a configuration."""
+
+    return canonical_hash(_ConfigurationSnapshot(entries=tuple(sorted(snapshot.items()))))
+
+
+@dataclass(frozen=True)
+class _ConfigurationSnapshot:
+    """Typed carrier so the canonical serializer keeps refusing raw mappings."""
+
+    entries: tuple[tuple[str, JSONValue], ...]
