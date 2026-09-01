@@ -64,6 +64,7 @@ a newer one.
 
 # Open Work / Blockers
 
+- GitHub #75 accepted scope is documentation-only: align the stale phase statement in `AGENTS.md` with the approved engineering state already recorded here. It must not change application behavior, persistence, configuration, business rules, operational procedures, or external systems.
 - BR-005 promotion precedence is on hold pending POS/merchandising decision.
 - The GitHub requirement backlog and its later follow-on issues are assigned and tracked through the issue-led `develop` workflow. Implement only a selected, unblocked issue at a time.
 - Promotion-rule issue #37 is merged, but it deliberately retains unresolved ambiguity rather than inventing winner priority. #38 and representative cases remain required before any deployed-compatibility claim.
