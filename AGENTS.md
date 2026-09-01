@@ -2,7 +2,7 @@
 
 ## Purpose and phase
 
-This repository defines the replacement of the ESL SQL Server, SQL Server Agent, Apache Hop, and Jenkins processing path. It is in the **architecture and specification phase**. Do not add production application code until the documents below are reviewed and an implementation plan is approved.
+This repository defines the replacement of the ESL SQL Server, SQL Server Agent, Apache Hop, and Jenkins processing path. The **engineering phase began on 2026-08-25** after the source-of-truth documents and implementation plans were reviewed and the non-production database gate was verified. Add application code only through an assigned GitHub issue whose accepted scope is consistent with the documents below and, where required, an approved implementation plan. Unapproved behavior and production-system changes remain prohibited.
 
 ## Read first
 

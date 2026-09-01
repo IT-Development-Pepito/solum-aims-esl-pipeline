@@ -1,0 +1,8 @@
+- **Timestamp / owner:** 2026-09-01 08:20 +08:00; Codex issue #75 documentation change.
+- **Issue:** GitHub #75, [docs] align AGENTS phase with approved engineering state, assigned to it20pepito; labels type:docs, area:docs, priority:p1.
+- **Git state:** `codex/75-align-engineering-phase` in `D:\Documents\Dev\solum-aims-esl-pipeline\.worktrees\issue-75-align-engineering-phase`, created from `origin/develop` at `ea33d93`; no commit or PR yet.
+- **Scope:** Updated only the stale phase statement in `AGENTS.md` to agree with `docs/PROGRESS.md`, while retaining issue-led approval, documentation-first control, and the prohibition on unapproved or production-system changes. No application, migration, configuration, business-rule, or operational procedure change.
+- **Evidence:** `docs/PROGRESS.md` records that engineering began on 2026-08-25 and that implementation through PR #73 is merged; local and remote `develop` both started at `ea33d93`. Documentation diff verification is the next action.
+- **Configuration:** None read or changed; no credential, connection string, secret value, or DPAPI material exposed.
+- **External state:** Created GitHub issue #75 and its isolated branch/worktree only. No PostgreSQL, SQL Server, AIMS, Jenkins, Hop, CSV-delivery, ESL-device, or production state accessed or changed.
+- **Risks / next action:** The implementation phase remains constrained by accepted issue scope and the source-of-truth documents. Next action: verify the diff, commit, open a PR to `develop`, obtain review, and merge before resuming #16.
