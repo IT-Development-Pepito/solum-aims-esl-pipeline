@@ -16,6 +16,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session, selectinload
 
 from esl_service.domain.actions import NewRecordAction
+from esl_service.domain.operations import ExecutionQuery
 from esl_service.domain.outcomes import FailureClass, NewExecution
 from esl_service.domain.workflow import (
     ExecutionStatus,
@@ -80,6 +81,34 @@ class ExecutionRepository:
         self._session.add(execution)
         self._session.flush()
         return execution
+
+    def query_executions(self, query: ExecutionQuery) -> list[WorkflowExecution]:
+        """Return execution status rows matching explicit FR-012 selectors.
+
+        Status and terminal reason are read from the authoritative execution
+        row. Structured events remain supporting evidence, not a status parser.
+        """
+
+        statement = select(WorkflowExecution)
+        if query.execution_id is not None:
+            statement = statement.where(WorkflowExecution.id == query.execution_id)
+        if query.workflow_name is not None:
+            statement = statement.where(
+                WorkflowExecution.workflow_name == query.workflow_name
+            )
+        if query.store_code is not None:
+            statement = statement.where(
+                WorkflowExecution.store_code == query.store_code
+            )
+        if query.started_from is not None:
+            statement = statement.where(
+                WorkflowExecution.started_at >= query.started_from,
+                WorkflowExecution.started_at <= query.started_to,
+            )
+        statement = statement.order_by(
+            WorkflowExecution.started_at.desc(), WorkflowExecution.id.desc()
+        )
+        return list(self._session.scalars(statement))
 
     def transition_execution(
         self,

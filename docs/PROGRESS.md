@@ -64,6 +64,7 @@ a newer one.
 
 # Open Work / Blockers
 
+- GitHub #16 accepted scope implements FR-011 and FR-012 only: query execution status by execution ID/workflow/store/time range, create a linked retry only from a failed execution, and create a linked replay only for an explicit bounded source window. Retry/replay require operator identity and reason, retain immutable audit evidence, obey existing scope ownership, and must not blindly retry an unresolved external action. API/CLI authorization, scheduling policy, automatic retry algorithms, runtime hosting, and production-system changes are explicit non-goals.
 - GitHub #75 accepted scope is documentation-only: align the stale phase statement in `AGENTS.md` with the approved engineering state already recorded here. It must not change application behavior, persistence, configuration, business rules, operational procedures, or external systems.
 - BR-005 promotion precedence is on hold pending POS/merchandising decision.
 - The GitHub requirement backlog and its later follow-on issues are assigned and tracked through the issue-led `develop` workflow. Implement only a selected, unblocked issue at a time.
