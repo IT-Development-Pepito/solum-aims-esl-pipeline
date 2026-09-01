@@ -26,6 +26,14 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from esl_service.domain.actions import ActionState
+from esl_service.domain.operations import (
+    WORKFLOW_RETRY_REFUSED,
+    ReplayRequest,
+    RetryRefusalReason,
+    RetryRequest,
+    decide_retry,
+)
 from esl_service.domain.outcomes import ExecutionMode, NewExecution, TriggerType
 from esl_service.domain.ownership import (
     SCOPE_GRANTED,
@@ -52,7 +60,9 @@ from esl_service.domain.scheduling import (
     decide_scheduled_launch,
 )
 from esl_service.domain.serialization import JSONValue
+from esl_service.domain.workflow import ExecutionStatus
 from esl_service.persistence.models import (
+    RecordAction,
     ScopeLease,
     WorkflowExecution,
     WorkflowSchedule,
@@ -63,6 +73,10 @@ from esl_service.persistence.repository import ExecutionRepository
 
 class UnknownSchedule(LookupError):
     """Raised when a schedule change names a schedule that does not exist."""
+
+
+class UnknownExecution(LookupError):
+    """Raised when retry/replay names an execution that does not exist."""
 
 
 class ScopeContention(RuntimeError):
@@ -86,6 +100,7 @@ class LaunchResult:
     execution: WorkflowExecution | None
     schedule_refusal: LaunchRefusalReason | None = None
     ownership: OwnershipDecision | None = None
+    control_refusal: RetryRefusalReason | None = None
 
     @property
     def launched(self) -> bool:
@@ -291,6 +306,102 @@ class LaunchRepository:
             now=now or datetime.now(UTC),
         )
 
+    def launch_retry(
+        self,
+        execution_id: UUID,
+        request: RetryRequest,
+        *,
+        correlation_id: UUID,
+        now: datetime | None = None,
+    ) -> LaunchResult:
+        """Create a linked retry only from an unambiguous FAILED run (FR-011)."""
+
+        original = self._execution(execution_id)
+        has_unresolved = (
+            self._session.scalar(
+                select(RecordAction.id)
+                .where(
+                    RecordAction.execution_id == original.id,
+                    RecordAction.state == ActionState.OUTCOME_UNKNOWN.value,
+                )
+                .limit(1)
+            )
+            is not None
+        )
+        decision = decide_retry(
+            ExecutionStatus(original.status),
+            has_unresolved_external_action=has_unresolved,
+        )
+        if not decision.allowed:
+            assert decision.refusal is not None
+            self._record_retry_refusal(
+                original,
+                request=request,
+                correlation_id=correlation_id,
+                refusal=decision.refusal,
+                has_unresolved_external_action=has_unresolved,
+            )
+            return LaunchResult(execution=None, control_refusal=decision.refusal)
+
+        return self._launch(
+            NewExecution(
+                workflow_name=original.workflow_name,
+                store_code=original.store_code,
+                trigger_type=TriggerType.RETRY,
+                mode=ExecutionMode(original.mode),
+                correlation_id=correlation_id,
+                source_window_start=original.source_window_start,
+                source_window_end=original.source_window_end,
+                configuration_version_id=original.configuration_version_id,
+                rule_version=original.rule_version,
+                requested_by=request.requested_by,
+                reason=request.reason,
+                retry_of_execution_id=original.id,
+            ),
+            actor=request.requested_by,
+            reason=request.reason,
+            extra_evidence={"retry_of_execution_id": str(original.id)},
+            now=now or datetime.now(UTC),
+        )
+
+    def launch_replay(
+        self,
+        execution_id: UUID,
+        request: ReplayRequest,
+        *,
+        correlation_id: UUID,
+        now: datetime | None = None,
+    ) -> LaunchResult:
+        """Create a linked replay for exactly one validated source window."""
+
+        original = self._execution(execution_id)
+        assert request.source_window_start is not None
+        assert request.source_window_end is not None
+        return self._launch(
+            NewExecution(
+                workflow_name=original.workflow_name,
+                store_code=original.store_code,
+                trigger_type=TriggerType.REPLAY,
+                mode=ExecutionMode(original.mode),
+                correlation_id=correlation_id,
+                source_window_start=request.source_window_start,
+                source_window_end=request.source_window_end,
+                configuration_version_id=original.configuration_version_id,
+                rule_version=original.rule_version,
+                requested_by=request.requested_by,
+                reason=request.reason,
+                replay_of_execution_id=original.id,
+            ),
+            actor=request.requested_by,
+            reason=request.reason,
+            extra_evidence={
+                "replay_of_execution_id": str(original.id),
+                "source_window_start": request.source_window_start.isoformat(),
+                "source_window_end": request.source_window_end.isoformat(),
+            },
+            now=now or datetime.now(UTC),
+        )
+
     # --- scope ownership ---------------------------------------------------
 
     def current_owner(self, scope: str) -> ScopeOwner | None:
@@ -315,6 +426,40 @@ class LaunchRepository:
             trigger_type=TriggerType(trigger_type),
             expires_at=lease.expires_at,
             released=lease.released_at is not None,
+        )
+
+    def _execution(self, execution_id: UUID) -> WorkflowExecution:
+        execution = self._session.get(WorkflowExecution, execution_id)
+        if execution is None:
+            raise UnknownExecution(f"no execution with id {execution_id}")
+        return execution
+
+    def _record_retry_refusal(
+        self,
+        original: WorkflowExecution,
+        *,
+        request: RetryRequest,
+        correlation_id: UUID,
+        refusal: RetryRefusalReason,
+        has_unresolved_external_action: bool,
+    ) -> None:
+        """Audit a refused operator retry even though it creates no new run."""
+
+        self._audit.append_audit_entry(
+            actor=request.requested_by,
+            action=WORKFLOW_RETRY_REFUSED,
+            reason=request.reason,
+            resource_type=EXECUTION_RESOURCE,
+            resource_key=str(original.id),
+            outcome=refusal.value,
+            execution_id=original.id,
+            configuration_version_id=original.configuration_version_id,
+            correlation_id=correlation_id,
+            after_evidence={
+                "reason_code": refusal.value,
+                "status": original.status,
+                "has_unresolved_external_action": has_unresolved_external_action,
+            },
         )
 
     def _launch(
