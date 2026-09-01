@@ -1,0 +1,8 @@
+- **Timestamp / owner:** 2026-09-01 08:27 +08:00; Codex issue #75 review-fix checkpoint.
+- **Issue:** GitHub #75, `[docs] align AGENTS phase with approved engineering state`, assigned to `it20pepito`; labels `type:docs`, `area:docs`, `priority:p1`.
+- **Git state:** `codex/75-align-engineering-phase` in `D:\Documents\Dev\solum-aims-esl-pipeline\.worktrees\issue-75-align-engineering-phase`; PR #76 is open at commit `30a01b4`; the cross-agent review is recorded and both CI `verify` checks are green.
+- **Scope:** Added the issue number and accepted documentation-only scope to `docs/PROGRESS.md`, resolving the review finding against `docs/WORKFLOW.md`. The existing start checkpoint remains immutable. No application behavior, persistence, configuration, business rule, operational procedure, or external-system change.
+- **Evidence:** The reviewer independently verified the phase claims, scope, diff, CI, migration/configuration impact, external-state impact, and overlap. After this follow-up commit, `git diff --check` and the documentation diff will be rerun.
+- **Configuration:** None read or changed; no credential, connection string, secret value, or DPAPI material exposed.
+- **External state:** No PostgreSQL, SQL Server, AIMS, Jenkins, Hop, CSV-delivery, ESL-device, or production state accessed or changed. GitHub Development-sidebar linkage remains the only review item to complete before merge.
+- **Risks / next action:** Link issue #75 in PR #76's Development sidebar, push this follow-up, confirm CI remains green, then merge and synchronize root `develop` before beginning issue #16.
