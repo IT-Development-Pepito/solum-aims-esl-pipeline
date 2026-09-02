@@ -201,6 +201,42 @@ Submitted is an in-flight observation, not a terminal category. A submitted acti
 4. Resolve/reconcile outstanding work.
 5. Use **`<target-service schedules enable --workflow <name> --reason <ticket>>`**, then verify the next controlled run.
 
+### Set up credentials for a new environment
+
+Do this once per environment, before the service is started for the first time. The rotation procedure that follows assumes this has been done. `README.md` carries the same procedure with a worked screen example.
+
+1. Create the database accounts: the state-store user named in `ESL_DATABASE_URL`, the read-only SQL Server account (`esl_reader`) that every SQL Server tier shares, and the read-only AIMS account (`esl_aims_reader`).
+2. Provision the four bundle keys with **`esl-admin secrets set <key> --reason <ticket>`**, one command per key, typing each value at the hidden prompt. In staging and production run this **as the Windows Service account**; the tool refuses any other account when `ESL_SERVICE_IDENTITY_SID` is configured, because under user-scope DPAPI (AD-017) a bundle written by another account is unreadable by the service. On a development machine the variable is unset and the tool proceeds under your own account after saying so.
+3. Prove every value with **`esl-admin check-connections`**. Every target must be `REACHABLE`, or `UNCONFIGURED` for a tier deliberately not in use yet. `CREDENTIAL_REJECTED` means the bundle value is wrong; `SECRET_UNAVAILABLE` means a key was not set.
+4. Start the service.
+
+| Key | Password of | Database |
+| --- | --- | --- |
+| `state.password` | the user in `ESL_DATABASE_URL` | the service's own PostgreSQL |
+| `source.sql.password` | `ESL_SOURCE_SQL_USERNAME` | `DBWH_8555`, `ESL`, `PEPITO_HO`, and every per-store server |
+| `aims.portal.password` | `ESL_AIMS_PORTAL_USERNAME` | `AIMS_PORTAL_DB` |
+| `aims.core.password` | `ESL_AIMS_CORE_USERNAME` | `AIMS_CORE_DB` |
+
+Where a password is written determines how it is written:
+
+| Where | Form |
+| --- | --- |
+| the bundle, through `esl-admin secrets set` (all four keys) | **raw**, exactly as it is |
+| `.env`, only the three `ESL_TEST_*_URL` test variables | **percent-encoded** (`@`→`%40`, `:`→`%3A`, `/`→`%2F`, `#`→`%23`, `%`→`%25`) because they sit inside a URL |
+
+No other variable in `.env` carries a password, and the startup gate refuses an `ESL_DATABASE_URL` that embeds one.
+
+What the prompt looks like, so it is clear where the raw value is typed:
+
+```
+PS> esl-admin secrets set state.password --reason "CHG-1042 initial provisioning"
+Secret value:               <- raw password, not echoed
+Repeat for confirmation:
+Stored secret 'state.password' in C:\ProgramData\SOLUM\ESL\secrets.dpapi.
+```
+
+`secrets set` is run again only when a database password is rotated (that key), when a new source needs its own credential (the new key), or when an administrator resets the service account's Windows password (all four keys; see the next procedure). It is never part of startup and never scheduled.
+
 ### Provision or rotate a secret
 
 1. Run as the Windows Service account. Under user-scope DPAPI (AD-017) a bundle written by any other account cannot be read by the service. When `ESL_SERVICE_IDENTITY_SID` is configured and does not match the running account, the command refuses with exit code 2; when it is not configured, as on a development machine, the command says the identity check was skipped and proceeds.
