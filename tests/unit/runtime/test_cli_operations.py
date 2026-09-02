@@ -262,7 +262,10 @@ def test_runs_list_filters_by_store(repositories: FakeRepositories) -> None:
     result = runner.invoke(cli.app, ["runs", "list", "--store", "084"])
 
     assert result.exit_code == 0, result.output
-    assert "084" in result.output and "075" not in result.output
+    # Compare the store column, not the raw text: a random execution id can
+    # contain "075" as a substring (it did, once, in CI).
+    listed_stores = [line.split()[2] for line in result.output.splitlines() if line.strip()]
+    assert listed_stores == ["084"]
 
 
 def test_runs_retry_and_replay_carry_identity_and_reason(repositories: FakeRepositories) -> None:
