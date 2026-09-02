@@ -27,6 +27,7 @@ from esl_service.application.contracts import (
     SourceWindow,
     StoreDirectoryEntry,
     StoreDiscoveryResult,
+    UnroutableStore,
     WarehouseProvenance,
     WarehouseReadRequest,
     WarehouseReadResult,
@@ -120,6 +121,14 @@ def _fetch_all(
     return tuple(dict(row) for row in result.mappings())
 
 
+def _is_blank(value: object) -> bool:
+    return value is None or (isinstance(value, str) and not value.strip())
+
+
+def _are(columns: list[str]) -> str:
+    return "are" if len(columns) > 1 else "is"
+
+
 class WarehouseReadError(RuntimeError):
     """A safe adapter failure carrying an existing #20 failure signal."""
 
@@ -188,23 +197,38 @@ class WarehouseReader:
         )
 
     def discover_stores(self, source_window: SourceWindow) -> StoreDiscoveryResult:
+        stores: list[StoreDirectoryEntry] = []
+        unroutable: list[UnroutableStore] = []
         try:
             read = self._executor.discover_stores()
-            stores = tuple(
-                StoreDirectoryEntry(
-                    store_code=_source_text(row, "ORG_CD"),
-                    org_ip=_source_text(row, "ORG_IP"),
-                    org_db=_source_text(row, "ORG_DB"),
+            for row in read.rows:
+                # A code is the one field nothing can be reported without; a
+                # row without a server is reported, not raised (#92, VERIFIED:
+                # 33 of 83 DimStore rows carry NULL or blank routing).
+                store_code = _source_text(row, "ORG_CD")
+                missing = [
+                    column for column in ("ORG_IP", "ORG_DB") if _is_blank(row.get(column))
+                ]
+                if missing:
+                    unroutable.append(
+                        UnroutableStore(store_code, f"{' and '.join(missing)} {_are(missing)} missing")
+                    )
+                    continue
+                stores.append(
+                    StoreDirectoryEntry(
+                        store_code=store_code,
+                        org_ip=_source_text(row, "ORG_IP"),
+                        org_db=_source_text(row, "ORG_DB"),
+                    )
                 )
-                for row in read.rows
-            )
         except WarehouseReadError:
             raise
         except Exception as error:  # noqa: BLE001 - driver errors need safe classification
             raise WarehouseReadError(_failure_signal(error)) from None
 
         return StoreDiscoveryResult(
-            stores=stores,
+            stores=tuple(stores),
+            unroutable=tuple(unroutable),
             provenance=self._provenance(
                 objects=(_DIM_STORE,),
                 source_window=source_window,

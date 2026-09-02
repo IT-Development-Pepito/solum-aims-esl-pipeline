@@ -34,7 +34,10 @@ than decided here.
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
+
+if TYPE_CHECKING:  # the report renders itself as #27 health lines; runtime import stays lazy
+    from esl_service.runtime.health import DependencyHealth
 
 from esl_service.domain.actions import DeliveryCertainty
 from esl_service.domain.failures import FailureSignal
@@ -124,11 +127,31 @@ WarehouseRow = Mapping[str, object]
 
 
 @dataclass(frozen=True)
+class UnroutableStore:
+    """A DimStore row the pipeline cannot address, and why (VERIFIED 2026-09-02).
+
+    33 of 83 rows carried NULL or blank ``ORG_IP``/``ORG_DB``, including
+    non-store rows such as ``Express``. The procedure skips them; so does the
+    replacement, but visibly, so an operator can see which codes were never
+    read (#92).
+    """
+
+    store_code: str
+    reason: str
+
+    def __post_init__(self) -> None:
+        _require_text(self.store_code, "store_code")
+        _require_text(self.reason, "reason")
+
+
+@dataclass(frozen=True)
 class StoreDiscoveryResult:
     """The complete current warehouse store directory and its read evidence."""
 
     stores: tuple[StoreDirectoryEntry, ...]
     provenance: WarehouseProvenance
+    #: Rows that named a store but not a server; never connected to.
+    unroutable: tuple[UnroutableStore, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -196,6 +219,191 @@ class UomMappingSourceReader(Protocol):
     def read_mappings(self, request: UomMappingReadRequest) -> UomMappingReadResult:
         """Return every raw mapping row for the requested item set."""
         ...
+
+
+# --- the per-store iRetail tier (#92) -----------------------------------------
+
+#: The twelve objects ``RefreshESL_New`` reads from each store's server,
+#: in the order the procedure first touches them (VERIFIED, PR #80).
+STORE_OBJECTS: tuple[str, ...] = (
+    "dbo.ITEM_MST",
+    "dbo.ITEM_DESCRIPTION",
+    "dbo.CMP_HDR",
+    "dbo.CMP_ORG_DTL",
+    "dbo.CMP_ITEM_GRP_HDR",
+    "dbo.CMP_ITEM_GRP_CND",
+    "dbo.CMP_CND_MST",
+    "dbo.CMP_ITEM_GRP_DTL",
+    "dbo.STOCK_MASTER",
+    "dbo.OFFLINE_TEMP_ITEM_MOVEMENT",
+    "dbo.POS_OFFLINE_TEMP_ITEM_MOVEMENT",
+    "dbo.BASIC_SP_MST",
+)
+
+_STORE_FIELDS: tuple[str, ...] = (
+    "items",
+    "item_descriptions",
+    "campaign_headers",
+    "campaign_org_details",
+    "campaign_item_group_headers",
+    "campaign_item_group_conditions",
+    "campaign_condition_masters",
+    "campaign_item_group_details",
+    "stock",
+    "offline_movements",
+    "pos_offline_movements",
+    "selling_prices",
+)
+
+
+@dataclass(frozen=True)
+class StoreReadRequest:
+    """One store, addressed from its ``DimStore`` row, and its reproducible window."""
+
+    store: StoreDirectoryEntry
+    source_window: SourceWindow
+
+
+@dataclass(frozen=True)
+class StoreReadResult:
+    """Unfiltered rows of all twelve store objects, before domain evaluation.
+
+    The procedure's status, validity, type, PFS, location, and price-category
+    predicates are business rules and are absent here on purpose.
+    """
+
+    items: tuple[WarehouseRow, ...]
+    item_descriptions: tuple[WarehouseRow, ...]
+    campaign_headers: tuple[WarehouseRow, ...]
+    campaign_org_details: tuple[WarehouseRow, ...]
+    campaign_item_group_headers: tuple[WarehouseRow, ...]
+    campaign_item_group_conditions: tuple[WarehouseRow, ...]
+    campaign_condition_masters: tuple[WarehouseRow, ...]
+    campaign_item_group_details: tuple[WarehouseRow, ...]
+    stock: tuple[WarehouseRow, ...]
+    offline_movements: tuple[WarehouseRow, ...]
+    pos_offline_movements: tuple[WarehouseRow, ...]
+    selling_prices: tuple[WarehouseRow, ...]
+    provenance: WarehouseProvenance
+
+    def as_mapping(self) -> dict[str, tuple[WarehouseRow, ...]]:
+        """Return the rows keyed by source object name."""
+
+        return {
+            name: getattr(self, field_name)
+            for name, field_name in zip(STORE_OBJECTS, _STORE_FIELDS, strict=True)
+        }
+
+    @classmethod
+    def from_mapping(
+        cls, rows: Mapping[str, Sequence[WarehouseRow]], provenance: WarehouseProvenance
+    ) -> "StoreReadResult":
+        """Build from rows keyed by object name; every object must be present."""
+
+        missing = [name for name in STORE_OBJECTS if name not in rows]
+        if missing:
+            raise ValueError(f"store read is missing objects: {', '.join(missing)}")
+        values = {
+            field_name: tuple(rows[name])
+            for name, field_name in zip(STORE_OBJECTS, _STORE_FIELDS, strict=True)
+        }
+        return cls(provenance=provenance, **values)
+
+
+@runtime_checkable
+class StoreSourceReader(Protocol):
+    """Read-only source port for one store's iRetail server (AD-002)."""
+
+    def read_store(self, request: StoreReadRequest) -> StoreReadResult:
+        """Return raw rows of all twelve objects for exactly one store."""
+        ...
+
+
+@dataclass(frozen=True)
+class StoreReadOutcome:
+    """What happened for one store during a fan-out: read, failed, or skipped."""
+
+    store_code: str
+    result: StoreReadResult | None
+    failure: FailureSignal | None
+    skipped_reason: str | None
+
+    def __post_init__(self) -> None:
+        _require_text(self.store_code, "store_code")
+        populated = sum(
+            value is not None for value in (self.result, self.failure, self.skipped_reason)
+        )
+        if populated != 1:
+            raise ValueError("an outcome is exactly one of read, failed, or skipped")
+
+    @property
+    def succeeded(self) -> bool:
+        return self.result is not None
+
+    @classmethod
+    def read(cls, store_code: str, result: StoreReadResult) -> "StoreReadOutcome":
+        return cls(store_code, result, None, None)
+
+    @classmethod
+    def failed(cls, store_code: str, failure: FailureSignal) -> "StoreReadOutcome":
+        return cls(store_code, None, failure, None)
+
+    @classmethod
+    def skipped(cls, store_code: str, reason: str) -> "StoreReadOutcome":
+        _require_text(reason, "reason")
+        return cls(store_code, None, None, reason)
+
+
+@dataclass(frozen=True)
+class StoreFanOutReport:
+    """Every store's outcome from one fan-out, ordered by store code."""
+
+    outcomes: tuple[StoreReadOutcome, ...]
+
+    def __post_init__(self) -> None:
+        codes = [outcome.store_code for outcome in self.outcomes]
+        duplicates = sorted({code for code in codes if codes.count(code) > 1})
+        if duplicates:
+            raise ValueError(f"store reported more than once: {', '.join(duplicates)}")
+        object.__setattr__(
+            self, "outcomes", tuple(sorted(self.outcomes, key=lambda o: o.store_code))
+        )
+
+    @property
+    def succeeded(self) -> tuple[StoreReadOutcome, ...]:
+        return tuple(o for o in self.outcomes if o.result is not None)
+
+    @property
+    def failed(self) -> tuple[StoreReadOutcome, ...]:
+        return tuple(o for o in self.outcomes if o.failure is not None)
+
+    @property
+    def skipped(self) -> tuple[StoreReadOutcome, ...]:
+        return tuple(o for o in self.outcomes if o.skipped_reason is not None)
+
+    def dependency_health(self) -> tuple["DependencyHealth", ...]:
+        """One #27 dependency line per store; none is required (FR-024)."""
+
+        from esl_service.runtime.health import DependencyHealth, HealthState
+
+        lines: list[DependencyHealth] = []
+        for outcome in self.outcomes:
+            if outcome.result is not None:
+                state, detail = HealthState.HEALTHY, None
+            elif outcome.failure is not None:
+                state = HealthState.UNAVAILABLE
+                detail = (
+                    f"{outcome.failure.dependency.value.lower()} "
+                    f"{outcome.failure.kind.value.lower()}"
+                )
+            else:
+                state, detail = HealthState.DEGRADED, outcome.skipped_reason
+            lines.append(
+                DependencyHealth(
+                    name=f"store-{outcome.store_code}", state=state, required=False, detail=detail
+                )
+            )
+        return tuple(lines)
 
 
 @dataclass(frozen=True)

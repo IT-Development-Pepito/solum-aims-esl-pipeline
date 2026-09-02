@@ -256,9 +256,48 @@ def test_reader_satisfies_the_application_port_and_exposes_no_write_api() -> Non
     ]
 
 
-def test_null_store_routing_value_is_malformed_source_data() -> None:
+def test_a_row_without_routing_is_reported_unroutable_not_raised() -> None:
+    """VERIFIED 2026-09-02: 33 of 83 DimStore rows carry NULL or blank ORG_IP/ORG_DB.
+
+    The procedure skips such a store ("not found in DimStore"); raising for
+    the whole directory would make discovery unusable on real data (#92).
+    """
+
     executor = FakeExecutor(
-        directory_rows=({"ORG_CD": "084", "ORG_IP": None, "ORG_DB": "STORE_084"},)
+        directory_rows=(
+            {"ORG_CD": "001", "ORG_IP": None, "ORG_DB": None},
+            {"ORG_CD": "0241", "ORG_IP": "", "ORG_DB": ""},
+            {"ORG_CD": "084", "ORG_IP": "10.0.0.84", "ORG_DB": "STORE_084"},
+            {"ORG_CD": "Express", "ORG_IP": None, "ORG_DB": None},
+        )
+    )
+
+    result = reader(executor).discover_stores(SourceWindow(START, END))
+
+    assert [store.store_code for store in result.stores] == ["084"]
+    assert [(u.store_code, u.reason) for u in result.unroutable] == [
+        ("001", "ORG_IP and ORG_DB are missing"),
+        ("0241", "ORG_IP and ORG_DB are missing"),
+        ("Express", "ORG_IP and ORG_DB are missing"),
+    ]
+
+
+def test_a_row_with_only_one_routing_value_names_the_missing_one() -> None:
+    executor = FakeExecutor(
+        directory_rows=({"ORG_CD": "084", "ORG_IP": "10.0.0.84", "ORG_DB": None},)
+    )
+
+    result = reader(executor).discover_stores(SourceWindow(START, END))
+
+    assert result.stores == ()
+    assert result.unroutable[0].reason == "ORG_DB is missing"
+
+
+def test_a_row_without_a_store_code_is_still_malformed_source_data() -> None:
+    """A code is the one field nothing can be reported without."""
+
+    executor = FakeExecutor(
+        directory_rows=({"ORG_CD": None, "ORG_IP": "10.0.0.84", "ORG_DB": "STORE_084"},)
     )
 
     with pytest.raises(WarehouseReadError) as raised:
