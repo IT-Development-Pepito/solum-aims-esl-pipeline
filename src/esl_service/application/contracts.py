@@ -406,6 +406,42 @@ class StoreFanOutReport:
         return tuple(lines)
 
 
+# --- the tb_ESL parity baseline, shadow mode only (#94) ------------------------
+
+
+@dataclass(frozen=True)
+class BaselineReadRequest:
+    """One store's legacy rows and the window of the run they are compared against.
+
+    ``tb_ESL`` is not a source (SYSTEM_ARCHITECTURE inventory, PR #80). It is
+    read only under ``ESL_SHADOW_MODE`` as the baseline the computed
+    canonical records are compared with (FR-021, FR-022).
+    """
+
+    store_code: str
+    source_window: SourceWindow
+
+    def __post_init__(self) -> None:
+        _require_text(self.store_code, "store_code")
+
+
+@dataclass(frozen=True)
+class BaselineReadResult:
+    """Raw ``tb_ESL`` rows for one store and the evidence of the read."""
+
+    rows: tuple[WarehouseRow, ...]
+    provenance: WarehouseProvenance
+
+
+@runtime_checkable
+class LegacyBaselineReader(Protocol):
+    """Read-only baseline port; reachable from shadow-mode comparison only."""
+
+    def read_baseline(self, request: BaselineReadRequest) -> BaselineReadResult:
+        """Return every raw legacy row for one store."""
+        ...
+
+
 @dataclass(frozen=True)
 class PageChange:
     """One requested label page assignment."""
