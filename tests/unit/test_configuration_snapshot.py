@@ -20,6 +20,8 @@ from esl_service.config import (
 )
 
 SECRET_URL = "postgresql+psycopg://esl_user:sup3rs3cret@db.internal:5432/esl"
+#: What the startup gate accepts since #78: where and as whom, never a password.
+STARTUP_URL = "postgresql+psycopg://esl_user@db.internal:5432/esl"
 
 
 @pytest.fixture(autouse=True)
@@ -54,7 +56,9 @@ def valid_values(**overrides: object) -> dict[str, object]:
 def test_valid_configuration_reports_no_problem() -> None:
     """A complete development configuration validates cleanly."""
 
-    settings, problems = validate_startup_configuration(valid_values())
+    settings, problems = validate_startup_configuration(
+        valid_values(database_url=STARTUP_URL)
+    )
     assert problems == ()
     assert settings is not None
     assert settings.environment == "development"

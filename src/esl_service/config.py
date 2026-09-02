@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
 from typing import ClassVar, Literal, NoReturn, Protocol
+from urllib.parse import urlsplit
 
 from pydantic import Field, ValidationError, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -419,6 +420,25 @@ class Settings(BaseSettings):
     compatibility_days: int | None = None
     service_identity_sid: str = Field(default="", repr=False)
     windows_service_name: str = ""
+    # Source and AIMS connections carry only non-secret parts (#78, AD-017).
+    # Every password is read from the DPAPI bundle by a fixed key; there is
+    # deliberately no field that could hold one. Empty means unconfigured.
+    # One read-only account and one ODBC driver cover every SQL Server tier,
+    # both confirmed by the source owner. DBWH_8555 and ESL share the instance.
+    source_sql_host: str = ""
+    source_sql_username: str = ""
+    source_sql_driver: str = "ODBC Driver 18 for SQL Server"
+    source_sql_trust_server_certificate: bool = True
+    source_warehouse_database: str = "DBWH_8555"
+    legacy_baseline_database: str = "ESL"
+    source_pepito_ho_host: str = ""
+    source_pepito_ho_database: str = "PEPITO_HO"
+    aims_host: str = ""
+    aims_port: int = 5432
+    aims_portal_database: str = ""
+    aims_portal_username: str = ""
+    aims_core_database: str = ""
+    aims_core_username: str = ""
     program_data_directory_provider_factory: ClassVar[
         Callable[[], ProgramDataDirectoryProvider]
     ] = WindowsProgramDataDirectoryProvider
@@ -560,9 +580,24 @@ def validate_startup_configuration(
     """
 
     try:
-        return Settings.model_validate(dict(values)), ()
+        settings = Settings.model_validate(dict(values))
     except ValidationError as error:
         return None, describe_configuration_problems(error)
+
+    # ESL_DATABASE_URL predates AD-007 and used to embed its password. The
+    # gate, not the model, enforces the rule so unit fixtures stay simple and
+    # the message can name the remedy without ever echoing the value.
+    if urlsplit(settings.database_url).password:
+        return None, (
+            ConfigurationProblem(
+                key="database_url",
+                message=(
+                    "must not embed a password; provision the state.password "
+                    "key in the secret bundle instead (AD-017)"
+                ),
+            ),
+        )
+    return settings, ()
 
 
 def sanitized_configuration_snapshot(settings: Settings) -> dict[str, JSONValue]:

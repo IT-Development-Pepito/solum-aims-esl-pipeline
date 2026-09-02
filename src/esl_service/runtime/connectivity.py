@@ -1,4 +1,8 @@
-"""On-demand connectivity checks for every configured database (#79, NFR-009).
+"""Connectivity to every configured database (#78, #79, NFR-009, AD-017).
+
+Targets are derived from configuration, which names where each database is
+and as whom to connect. Passwords are never part of a target; each target
+names a fixed bundle key and the value is read at the moment of connecting.
 
 A check answers one question per target -- can we reach it, and as whom --
 and never says how it tried. Driver error messages routinely embed the whole
@@ -7,10 +11,17 @@ vocabulary carries the diagnosis instead, and it is deliberately five-valued
 so a developer can tell a credential fault from a route fault from a missing
 secret from a target nobody has configured yet.
 
-This is the same probe #78 later wires into ``HealthService``. Only the caller
-differs: here it is an administrator running a command by hand.
+The same probe serves two callers: an administrator running
+``esl-admin check-connections`` by hand, and ``HealthService`` reporting
+dependency health. Only the caller differs.
+
+Per-store targets are the one case where a connection address comes from
+table data rather than configuration: ``DimStore.ORG_IP`` and ``ORG_DB``.
+They are validated as a bare IP or hostname before use, because anyone who
+can write that row could otherwise redirect a connection.
 """
 
+import re
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Protocol
@@ -18,7 +29,38 @@ from typing import Protocol
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import URL, make_url
 
-from esl_service.runtime.secrets import SecretProvider, SecretUnavailableError
+from esl_service.config import Settings
+from esl_service.runtime.health import DependencyHealth, HealthState
+from esl_service.runtime.secrets import (
+    AIMS_CORE_PASSWORD_KEY,
+    AIMS_PORTAL_PASSWORD_KEY,
+    SOURCE_SQL_PASSWORD_KEY,
+    STATE_PASSWORD_KEY,
+    SecretProvider,
+    SecretUnavailableError,
+)
+
+__all__ = [
+    "AIMS_CORE_PASSWORD_KEY",
+    "AIMS_PORTAL_PASSWORD_KEY",
+    "SOURCE_SQL_PASSWORD_KEY",
+    "STATE_PASSWORD_KEY",
+    "ConnectionTarget",
+    "ConnectivityProbe",
+    "Connector",
+    "InvalidStoreAddress",
+    "ProbeOutcome",
+    "ProbeResult",
+    "SqlAlchemyConnector",
+    "TargetKind",
+    "build_probes",
+    "classify_failure",
+    "parse_target",
+    "probe",
+    "state_store_target",
+    "store_target",
+    "targets_from_settings",
+]
 
 
 class TargetKind(StrEnum):
@@ -31,12 +73,17 @@ _IDENTITY_QUERY = {
     TargetKind.POSTGRESQL: "SELECT current_user",
     TargetKind.SQLSERVER: "SELECT SUSER_SNAME()",
 }
-#: SQL Server needs the ODBC driver named in the URL; #78 makes it configurable.
+#: Used when a target is built without configuration, e.g. from --target.
 DEFAULT_SQL_SERVER_DRIVER = "ODBC Driver 18 for SQL Server"
 
 #: SQLSTATE values that mean the server answered and refused the credential.
 _CREDENTIAL_SQLSTATES = frozenset({"28P01", "28000"})
 _CREDENTIAL_PHRASES = ("password authentication failed", "login failed")
+
+#: A bare IPv4 address, or a hostname of dot-separated labels. Nothing else.
+_IPV4 = re.compile(r"^(?:25[0-5]|2[0-4]\d|1?\d?\d)(?:\.(?:25[0-5]|2[0-4]\d|1?\d?\d)){3}$")
+_HOSTNAME = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*$")
+_IDENTIFIER = re.compile(r"^[A-Za-z0-9_]+$")
 
 
 class ProbeOutcome(StrEnum):
@@ -47,13 +94,18 @@ class ProbeOutcome(StrEnum):
     UNCONFIGURED = "UNCONFIGURED"
 
 
-#: Fixed, safe wording per outcome. Never the exception text.
+#: Fixed, safe wording per outcome. Never the exception text, and never a
+#: word the health report treats as secret-like.
 _DETAIL = {
     ProbeOutcome.UNREACHABLE: "no answer from the host, port, or database",
-    ProbeOutcome.CREDENTIAL_REJECTED: "the server answered and refused the credential",
-    ProbeOutcome.SECRET_UNAVAILABLE: "the password key is not in the secret bundle",
-    ProbeOutcome.UNCONFIGURED: "host, database, or username is not configured",
+    ProbeOutcome.CREDENTIAL_REJECTED: "the server answered and refused the login",
+    ProbeOutcome.SECRET_UNAVAILABLE: "the bundle entry for this target is not provisioned",
+    ProbeOutcome.UNCONFIGURED: "host, database, or account is not configured",
 }
+
+
+class InvalidStoreAddress(ValueError):
+    """Raised when a DimStore row does not hold a plain address or database name."""
 
 
 @dataclass(frozen=True)
@@ -69,6 +121,8 @@ class ConnectionTarget:
     password_key: str
     #: Only for targets whose configured URL already embeds the password.
     password: str | None = field(default=None, repr=False)
+    driver: str = DEFAULT_SQL_SERVER_DRIVER
+    trust_server_certificate: bool = True
 
     def configured(self) -> bool:
         return all(part.strip() for part in (self.host, self.database, self.username))
@@ -77,7 +131,10 @@ class ConnectionTarget:
         """Build the URL from parts, so a password never needs escaping."""
 
         query = (
-            {"driver": DEFAULT_SQL_SERVER_DRIVER, "TrustServerCertificate": "yes"}
+            {
+                "driver": self.driver,
+                "TrustServerCertificate": "yes" if self.trust_server_certificate else "no",
+            }
             if self.kind is TargetKind.SQLSERVER
             else {}
         )
@@ -162,13 +219,17 @@ def probe(target: ConnectionTarget, secrets: SecretProvider, connector: Connecto
     """Attempt one target and report an outcome that discloses nothing."""
 
     if not target.configured():
-        return ProbeResult(target.name, ProbeOutcome.UNCONFIGURED, detail=_DETAIL[ProbeOutcome.UNCONFIGURED])
+        return ProbeResult(
+            target.name, ProbeOutcome.UNCONFIGURED, detail=_DETAIL[ProbeOutcome.UNCONFIGURED]
+        )
 
     try:
         password = target.password or secrets.get(target.password_key)
     except SecretUnavailableError:
         return ProbeResult(
-            target.name, ProbeOutcome.SECRET_UNAVAILABLE, detail=_DETAIL[ProbeOutcome.SECRET_UNAVAILABLE]
+            target.name,
+            ProbeOutcome.SECRET_UNAVAILABLE,
+            detail=_DETAIL[ProbeOutcome.SECRET_UNAVAILABLE],
         )
 
     try:
@@ -179,6 +240,160 @@ def probe(target: ConnectionTarget, secrets: SecretProvider, connector: Connecto
         outcome = classify_failure(error)
         return ProbeResult(target.name, outcome, detail=_DETAIL[outcome])
     return ProbeResult(target.name, ProbeOutcome.REACHABLE, identity=identity)
+
+
+# --- health integration (#78) ----------------------------------------------
+
+_HEALTH_STATE = {
+    ProbeOutcome.REACHABLE: HealthState.HEALTHY,
+    ProbeOutcome.UNCONFIGURED: HealthState.DEGRADED,
+    ProbeOutcome.UNREACHABLE: HealthState.UNAVAILABLE,
+    ProbeOutcome.CREDENTIAL_REJECTED: HealthState.UNAVAILABLE,
+    ProbeOutcome.SECRET_UNAVAILABLE: HealthState.UNAVAILABLE,
+}
+
+
+class ConnectivityProbe:
+    """One target reported through ``HealthService`` (FR-024).
+
+    Only the state store is required: a source that is down degrades the
+    report but must not make a running service report itself unready, since
+    it can still serve status and audit. An unconfigured target is degraded
+    rather than unavailable, so a gap in configuration is visible without
+    being counted as an outage.
+    """
+
+    def __init__(
+        self,
+        target: ConnectionTarget,
+        secrets: SecretProvider,
+        connector: Connector,
+        *,
+        required: bool = False,
+    ) -> None:
+        self._target = target
+        self._secrets = secrets
+        self._connector = connector
+        self.name = target.name
+        self.required = required
+
+    def check(self) -> DependencyHealth:
+        result = probe(self._target, self._secrets, self._connector)
+        return DependencyHealth(
+            name=self.name,
+            state=_HEALTH_STATE[result.outcome],
+            required=self.required,
+            detail=result.detail,
+        )
+
+
+def build_probes(
+    settings: Settings, secrets: SecretProvider, connector: Connector
+) -> tuple[ConnectivityProbe, ...]:
+    """One probe per configured target; only the state store is required."""
+
+    return tuple(
+        ConnectivityProbe(
+            target, secrets, connector, required=target.name == STATE_STORE_NAME
+        )
+        for target in targets_from_settings(settings)
+    )
+
+
+# --- targets from configuration (#78) --------------------------------------
+
+STATE_STORE_NAME = "state-store"
+
+
+def state_store_target(database_url: str) -> ConnectionTarget:
+    """The service's own PostgreSQL. Its password comes from the bundle.
+
+    ``ESL_DATABASE_URL`` names where and as whom; any password it still
+    embeds is ignored here and refused by the startup gate, so the bundle is
+    the single source of truth for that credential.
+    """
+
+    url = make_url(database_url)
+    return ConnectionTarget(
+        name=STATE_STORE_NAME,
+        kind=TargetKind.POSTGRESQL,
+        host=url.host or "",
+        port=url.port,
+        database=url.database or "",
+        username=url.username or "",
+        password_key=STATE_PASSWORD_KEY,
+    )
+
+
+def _sql_server(settings: Settings, name: str, host: str, database: str) -> ConnectionTarget:
+    return ConnectionTarget(
+        name=name,
+        kind=TargetKind.SQLSERVER,
+        host=host,
+        port=None,
+        database=database,
+        username=settings.source_sql_username,
+        password_key=SOURCE_SQL_PASSWORD_KEY,
+        driver=settings.source_sql_driver,
+        trust_server_certificate=settings.source_sql_trust_server_certificate,
+    )
+
+
+def _aims(settings: Settings, name: str, database: str, username: str, key: str) -> ConnectionTarget:
+    return ConnectionTarget(
+        name=name,
+        kind=TargetKind.POSTGRESQL,
+        host=settings.aims_host,
+        port=settings.aims_port,
+        database=database,
+        username=username,
+        password_key=key,
+    )
+
+
+def targets_from_settings(settings: Settings) -> tuple[ConnectionTarget, ...]:
+    """Every tier configuration knows about, configured or not.
+
+    Unconfigured tiers are returned rather than omitted, so a report shows
+    the gap while access is still being arranged. ``STORE_OPS_APP`` is
+    deliberately absent: its only use in the procedure is commented out.
+    Per-store servers are not here either, because their addresses come from
+    ``DimStore`` at run time; see :func:`store_target`.
+    """
+
+    return (
+        state_store_target(settings.database_url),
+        _sql_server(settings, "warehouse", settings.source_sql_host, settings.source_warehouse_database),
+        _sql_server(settings, "legacy-baseline", settings.source_sql_host, settings.legacy_baseline_database),
+        _sql_server(settings, "pepito-ho", settings.source_pepito_ho_host, settings.source_pepito_ho_database),
+        _aims(settings, "aims-portal", settings.aims_portal_database, settings.aims_portal_username, AIMS_PORTAL_PASSWORD_KEY),
+        _aims(settings, "aims-core", settings.aims_core_database, settings.aims_core_username, AIMS_CORE_PASSWORD_KEY),
+    )
+
+
+def store_target(settings: Settings, *, store_code: str, org_ip: str, org_db: str) -> ConnectionTarget:
+    """A per-store iRetail server, addressed from a ``DimStore`` row.
+
+    The address is validated as a bare IPv4 address or hostname and the
+    database as a plain identifier before either is used. ``ORG_IP`` holds a
+    bare IP with no port, confirmed by the source owner, so no port is
+    accepted or assumed.
+    """
+
+    address = org_ip.strip()
+    if not (_IPV4.match(address) or _HOSTNAME.match(address)):
+        raise InvalidStoreAddress(
+            f"store {store_code!r} address must be a bare IP address or hostname"
+        )
+    database = org_db.strip()
+    if not _IDENTIFIER.match(database):
+        raise InvalidStoreAddress(
+            f"store {store_code!r} database name must be a plain identifier"
+        )
+    return _sql_server(settings, f"store-{store_code.strip()}", address, database)
+
+
+# --- targets from the command line (#79) -----------------------------------
 
 
 def parse_target(spec: str) -> ConnectionTarget:
@@ -199,7 +414,11 @@ def parse_target(spec: str) -> ConnectionTarget:
     if url.password:
         raise ValueError("a target must not carry an inline password; name a bundle key")
     scheme = url.drivername.split("+")[0]
-    kinds = {"postgresql": TargetKind.POSTGRESQL, "mssql": TargetKind.SQLSERVER, "sqlserver": TargetKind.SQLSERVER}
+    kinds = {
+        "postgresql": TargetKind.POSTGRESQL,
+        "mssql": TargetKind.SQLSERVER,
+        "sqlserver": TargetKind.SQLSERVER,
+    }
     if scheme not in kinds:
         raise ValueError(f"unsupported target kind {scheme!r}; use postgresql or sqlserver")
 
@@ -211,20 +430,4 @@ def parse_target(spec: str) -> ConnectionTarget:
         database=url.database or "",
         username=url.username or "",
         password_key=password_key.strip(),
-    )
-
-
-def state_store_target(database_url: str) -> ConnectionTarget:
-    """The service's own PostgreSQL, whose configured URL embeds its password."""
-
-    url = make_url(database_url)
-    return ConnectionTarget(
-        name="state-store",
-        kind=TargetKind.POSTGRESQL,
-        host=url.host or "",
-        port=url.port,
-        database=url.database or "",
-        username=url.username or "",
-        password_key="state.password",
-        password=url.password,
     )
