@@ -11,6 +11,9 @@ dependencies = ["fastapi", "uvicorn[standard]", "sqlalchemy", "alembic", "pydant
 [project.optional-dependencies]
 dev = ["pytest", "ruff", "mypy", "respx"]
 
+[project.scripts]
+esl-admin = "esl_service.runtime.cli:app"
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 

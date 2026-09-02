@@ -197,6 +197,22 @@ Submitted is an in-flight observation, not a terminal category. A submitted acti
 4. Resolve/reconcile outstanding work.
 5. Use **`<target-service schedules enable --workflow <name> --reason <ticket>>`**, then verify the next controlled run.
 
+### Provision or rotate a secret
+
+1. Run as the Windows Service account. Under user-scope DPAPI (AD-017) a bundle written by any other account cannot be read by the service. When `ESL_SERVICE_IDENTITY_SID` is configured and does not match the running account, the command refuses with exit code 2; when it is not configured, as on a development machine, the command says the identity check was skipped and proceeds.
+2. Run **`esl-admin secrets set <key> --reason <ticket>`** and type the value at the hidden, confirmed prompt, or pipe it with `--stdin`. The value is never accepted as an argument, so it cannot reach shell history or a process listing. Keys are plain identifiers such as `aims.portal.password`.
+3. Confirm with **`esl-admin secrets list`**, which prints names only, and remove a retired key with **`esl-admin secrets remove <key> --reason <ticket>`**.
+4. Prove the value works with the connectivity check below. Setting a secret proves only that it is readable.
+5. Each change is audited as `secret.set` or `secret.removed`, naming the actor, the key, and the reason, never the value. If the state store is unreachable the command warns and still succeeds, because the store's own password is provisioned this way and may not be reachable yet.
+
+**If an administrator resets the service account's password**, the bundle becomes permanently unreadable and the service reports `secret bundle is unavailable`, which is indistinguishable from a missing or corrupt bundle. Recovery is to recreate every secret with `secrets set` as the service account. Changing the password *as the account*, knowing the old one, does not have this effect. An existing bundle that cannot be read is never overwritten by `set`, so a bad write cannot silently discard the other secrets.
+
+### Check database connectivity
+
+1. Run **`esl-admin check-connections`**. It probes the state store from configuration and any extra target given as `--target name=postgresql://user@host:port/db#bundle.key` or `--target name=sqlserver://user@host/db#bundle.key`. The part after `#` is a bundle key, never a password; an inline password is rejected.
+2. Read the outcome per target: `REACHABLE` with the identity the server reports; `UNREACHABLE` means no answer from the host, port, or database; `CREDENTIAL_REJECTED` means the server answered and refused the credential; `SECRET_UNAVAILABLE` means the key is not in the bundle; `UNCONFIGURED` means the target has no host, database, or username yet and is not counted as a failure.
+3. The exit code is non-zero when any target is neither `REACHABLE` nor `UNCONFIGURED`, so the check can run unattended. Output never contains a connection string or a password; driver error text is dropped because it commonly embeds both.
+
 ### Restart the service
 
 1. Disable affected schedules if maintenance requires it.
