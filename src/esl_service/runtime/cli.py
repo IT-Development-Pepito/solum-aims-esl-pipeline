@@ -162,6 +162,46 @@ def _store(bundle: Path, sid: str | None) -> SecretBundleStore:
     )
 
 
+def _ensure_bundle_directory(bundle: Path, sid: str | None) -> None:
+    """Make sure the bundle's directory exists, or refuse in a controlled way.
+
+    On a development machine, where no service identity is configured, the
+    directory is created and the creation announced. With a service identity
+    configured it is never created here: the startup validator checks the
+    directory's owner and ACL, so a folder made with inherited permissions
+    would be accepted by this tool and rejected by the service.
+    """
+
+    directory = bundle.parent
+    if directory.is_dir():
+        return
+    if sid is None:
+        directory.mkdir(parents=True, exist_ok=True)
+        typer.echo(
+            f"Created bundle directory {directory} (development). In staging and "
+            "production create it first, as an administrator, with an ACL limited to "
+            "the service account, Administrators, and SYSTEM."
+        )
+        return
+    typer.echo(
+        f"Refused: the bundle directory {directory} does not exist. Create it as an "
+        "administrator with an ACL limited to the service account, Administrators, "
+        "and SYSTEM, then run this command again."
+    )
+    raise typer.Exit(code=1)
+
+
+def _refuse_filesystem(path: Path) -> None:
+    """Report a filesystem refusal without the driver text, and exit."""
+
+    typer.echo(
+        f"Refused: the filesystem denied access to {path} (a permission or path "
+        "problem). No secret was stored. Check the directory's ACL and that this "
+        "command runs as the account that owns the bundle."
+    )
+    raise typer.Exit(code=1)
+
+
 def _audit_or_warn(
     *, action: str, reason: str, name: str, settings: Settings | None, bundle: Path
 ) -> None:
@@ -207,6 +247,7 @@ def secrets_set(
         value = typer.prompt("Secret value", hide_input=True, confirmation_prompt=True)
 
     path = _bundle_path(bundle, settings)
+    _ensure_bundle_directory(path, sid)
     try:
         _store(path, sid).set(name, value)
     except InvalidSecretName as error:
@@ -218,6 +259,10 @@ def secrets_set(
     except ValueError as error:
         typer.echo(f"Refused: {error}")
         raise typer.Exit(code=1) from None
+    except OSError:
+        # FileNotFoundError and PermissionError included: the OS text can name
+        # paths and accounts, so a fixed message replaces it.
+        _refuse_filesystem(path)
 
     typer.echo(f"Stored secret '{name}' in {path}.")
     _audit_or_warn(
@@ -236,12 +281,15 @@ def secrets_remove(
     settings = _load_settings()
     sid = _guard_identity(settings)
     path = _bundle_path(bundle, settings)
+    _ensure_bundle_directory(path, sid)
 
     try:
         removed = _store(path, sid).remove(name)
     except SecretUnavailableError:
         typer.echo("Refused: the secret bundle is unavailable.")
         raise typer.Exit(code=1) from None
+    except OSError:
+        _refuse_filesystem(path)
     if not removed:
         typer.echo(f"Secret '{name}' is not present in {path}.")
         raise typer.Exit(code=1)

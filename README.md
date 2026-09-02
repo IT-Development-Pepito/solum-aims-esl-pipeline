@@ -55,10 +55,13 @@ The startup gate refuses an `ESL_DATABASE_URL` that still embeds a password, so 
 
 ```
 1. create the database accounts        esl_pipeline_*, esl_reader, esl_aims_reader
-2. esl-admin secrets set  x 4          one command per key, see below
-3. esl-admin check-connections         every target must be REACHABLE or UNCONFIGURED
-4. start the service
+2. create the bundle directory         C:\ProgramData\SOLUM\ESL, ACL: service account, Administrators, SYSTEM
+3. esl-admin secrets set  x 4          one command per key, see below
+4. esl-admin check-connections         every target must be REACHABLE or UNCONFIGURED
+5. start the service
 ```
+
+Step 2 applies to staging and production. The tool refuses to write into a missing directory when a service identity is configured, because a folder it created itself would carry inherited permissions that the startup validator rejects. On a development machine, where no service identity is configured, `esl-admin` creates the directory for you and says so.
 
 Step 2 is run **as the Windows Service account** in staging and production. Under user-scope DPAPI a bundle written by any other account is unreadable by the service, so `esl-admin` refuses to write when `ESL_SERVICE_IDENTITY_SID` is configured and does not match the running account. On a development machine that variable is unset; the tool prints `Identity check skipped` and proceeds under your own account.
 
