@@ -54,7 +54,7 @@ def bundle(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setattr(cli, "_codec", Base64Codec)
     monkeypatch.setattr(cli, "_protector", NoopProtector)
     monkeypatch.setattr(cli, "_current_sid", lambda: "S-1-5-21-1-2-3-1001")
-    monkeypatch.setattr(cli, "_record_audit", lambda **_: True)
+    monkeypatch.setattr(cli, "_record_audit", lambda **_: None)
     for name in ("ESL_ENVIRONMENT", "ESL_DATABASE_URL", "ESL_INTERNAL_HOST",
                  "ESL_SHADOW_MODE", "ESL_SERVICE_IDENTITY_SID", "ESL_SECRET_BUNDLE_PATH"):
         monkeypatch.delenv(name, raising=False)
@@ -200,9 +200,8 @@ def test_set_records_an_audit_entry_naming_actor_key_and_action(
 ) -> None:
     recorded: list[dict[str, object]] = []
 
-    def capture(**fields: object) -> bool:
+    def capture(**fields: object) -> None:
         recorded.append(fields)
-        return True
 
     monkeypatch.setattr(cli, "_record_audit", capture)
 
@@ -225,7 +224,7 @@ def test_set_still_succeeds_when_audit_cannot_be_recorded(
 ) -> None:
     """Provisioning may happen before the state store is reachable at all."""
 
-    monkeypatch.setattr(cli, "_record_audit", lambda **_: False)
+    monkeypatch.setattr(cli, "_record_audit", lambda **_: cli.AuditFailure.UNREACHABLE)
 
     result = runner.invoke(
         cli.app,

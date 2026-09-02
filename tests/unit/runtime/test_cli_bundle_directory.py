@@ -50,7 +50,7 @@ def missing_dir_bundle(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setattr(cli, "_codec", Base64Codec)
     monkeypatch.setattr(cli, "_protector", NoopProtector)
     monkeypatch.setattr(cli, "_current_sid", lambda: SID)
-    monkeypatch.setattr(cli, "_record_audit", lambda **_: True)
+    monkeypatch.setattr(cli, "_record_audit", lambda **_: None)
     for name in ("ESL_ENVIRONMENT", "ESL_DATABASE_URL", "ESL_INTERNAL_HOST",
                  "ESL_SERVICE_IDENTITY_SID", "ESL_SECRET_BUNDLE_PATH"):
         monkeypatch.delenv(name, raising=False)

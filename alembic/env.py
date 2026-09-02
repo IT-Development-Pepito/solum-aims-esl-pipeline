@@ -7,17 +7,25 @@ from logging.config import fileConfig
 
 from sqlalchemy import engine_from_config, pool
 
+from pathlib import Path
+
 from alembic import context
+from esl_service.persistence.migration_url import resolve_migration_url
 from esl_service.persistence.models import Base
+from esl_service.runtime.secrets import BundleSecretProvider
 
 config = context.config
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-database_url = os.environ.get("ESL_DATABASE_URL")
-if not database_url:
-    raise RuntimeError("ESL_DATABASE_URL must be configured before running migrations")
+# ESL_DATABASE_URL names where and as whom; the password comes from the secret
+# bundle's state.password key, exactly as the service resolves it (AD-017). A
+# URL that already embeds a password is used unchanged, which is how the test
+# fixtures and CI supply the dedicated test database.
+database_url = resolve_migration_url(
+    os.environ, lambda path: BundleSecretProvider(Path(path))
+)
 
 config.set_main_option("sqlalchemy.url", database_url.replace("%", "%%"))
 target_metadata = Base.metadata
