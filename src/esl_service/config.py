@@ -407,6 +407,8 @@ class Settings(BaseSettings):
     environment: Literal["development", "staging", "production"]
     database_url: str
     internal_host: str
+    # The internal API listener binds to internal_host on this port only (#28).
+    internal_port: int = Field(default=8000, ge=1, le=65535)
     shadow_mode: bool = True
     secret_bundle_path: Path = Path(r"C:\ProgramData\SOLUM\ESL\secrets.dpapi")
     # Retention durations are UNKNOWN / NEEDS-DISCOVERY, so none is defaulted.

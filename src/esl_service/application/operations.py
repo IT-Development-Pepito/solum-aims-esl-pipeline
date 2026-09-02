@@ -183,6 +183,15 @@ class AuthorizedOperations:
 
     # -- authorization -------------------------------------------------------
 
+    def authorize(self, principal: Principal, operation: Operation, *, resource_key: str) -> None:
+        """Check a role for a caller-owned action, auditing and raising on refusal.
+
+        Used by surfaces (#28) that hold state the service does not, such as
+        the scheduler's pause flag, so their refusals land in the same ledger.
+        """
+
+        self._authorize(principal, operation, resource_key)
+
     def _authorize(self, principal: Principal, operation: Operation, resource_key: str) -> None:
         """Refuse, audit the refusal under the principal's name, and raise."""
 

@@ -157,6 +157,11 @@ class BundleSecretProvider:
         self._path = path
         self._codec = codec or DpapiBundleCodec()
 
+    def names(self) -> tuple[str, ...]:
+        """Return the names the bundle holds, never their values (#28 API tokens)."""
+
+        return tuple(sorted(_load_bundle(self._path, self._codec)))
+
     def get(self, name: str) -> str:
         """Return one named value from the configured encrypted bundle."""
 

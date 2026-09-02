@@ -26,6 +26,7 @@ import typer
 from pydantic import ValidationError
 
 from esl_service.config import Settings
+from esl_service.runtime import cli_operations
 from esl_service.runtime.connectivity import (
     ConnectionTarget,
     Connector,
@@ -57,6 +58,14 @@ from esl_service.runtime.secrets import (
 app = typer.Typer(no_args_is_help=True, add_completion=False, help=__doc__)
 secrets_app = typer.Typer(no_args_is_help=True, help="Provision the DPAPI secret bundle.")
 app.add_typer(secrets_app, name="secrets")
+
+# Operator commands (#28) share this entry point so one installed tool covers
+# administration, diagnostics, and authorized operations (FR-029).
+app.add_typer(cli_operations.runs_app, name="runs")
+app.add_typer(cli_operations.schedules_app, name="schedules")
+app.command("status")(cli_operations.status)
+app.command("fallback")(cli_operations.fallback)
+app.command("serve")(cli_operations.serve)
 
 DEFAULT_BUNDLE_PATH = Path(r"C:\ProgramData\SOLUM\ESL\secrets.dpapi")
 
