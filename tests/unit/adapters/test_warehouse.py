@@ -10,6 +10,7 @@ import pytest
 from sqlalchemy import Engine
 from sqlalchemy.engine import URL
 
+from esl_service.adapters import sql_server as sql_server_module
 from esl_service.adapters import warehouse as warehouse_module
 from esl_service.adapters.warehouse import (
     WAREHOUSE_QUERY_VERSION,
@@ -167,6 +168,7 @@ def test_discovers_every_store_dynamically_and_records_provenance() -> None:
     assert result.provenance.instance == "warehouse.internal"
     assert result.provenance.database == "DBWH_8555"
     assert result.provenance.objects == ("dbo.DimStore",)
+    assert result.provenance.isolation_level == "READ COMMITTED"
     assert result.provenance.query_version == WAREHOUSE_QUERY_VERSION
     assert result.provenance.source_watermark == DATABASE_NOW
     assert result.provenance.source_window_start == START
@@ -299,20 +301,24 @@ def test_sql_server_url_requests_read_only_application_intent_without_exposing_p
     assert "top-secret" not in repr(read_only)
 
 
-def test_engine_requires_snapshot_isolation(monkeypatch: pytest.MonkeyPatch) -> None:
-    captured: dict[str, object] = {}
+def test_engine_reads_committed_by_default_and_snapshot_only_by_setting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AD-020: all three source databases run with snapshot isolation OFF."""
+
+    captured: list[dict[str, object]] = []
 
     def capture_create_engine(url: URL, **kwargs: object) -> Engine:
-        captured["url"] = url
-        captured.update(kwargs)
+        captured.append({"url": url, **kwargs})
         return cast(Engine, object())
 
-    monkeypatch.setattr(warehouse_module, "create_engine", capture_create_engine)
+    monkeypatch.setattr(sql_server_module, "create_engine", capture_create_engine)
     url = URL.create("mssql+pyodbc", host="warehouse.internal", database="DBWH_8555")
 
     create_warehouse_engine(url)
+    create_warehouse_engine(url, isolation_level="SNAPSHOT")
 
-    assert captured["isolation_level"] == "SNAPSHOT"
+    assert [c["isolation_level"] for c in captured] == ["READ COMMITTED", "SNAPSHOT"]
 
 
 def test_factory_uses_issue_78_settings_and_the_fixed_source_secret_key(
@@ -320,7 +326,7 @@ def test_factory_uses_issue_78_settings_and_the_fixed_source_secret_key(
 ) -> None:
     captured: list[URL] = []
 
-    def capture_engine(url: URL) -> Engine:
+    def capture_engine(url: URL, **_: object) -> Engine:
         captured.append(url)
         return cast(Engine, object())
 

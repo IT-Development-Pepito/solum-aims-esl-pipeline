@@ -91,9 +91,13 @@ class WarehouseProvenance:
     source_window_start: datetime
     source_window_end: datetime
     source_watermark: datetime
+    #: The isolation the rows were read under (AD-020); part of the evidence
+    #: because it bounds what a replay can be expected to reproduce.
+    isolation_level: str = "READ COMMITTED"
 
     def __post_init__(self) -> None:
         _require_text(self.instance, "instance")
+        _require_text(self.isolation_level, "isolation_level")
         _require_text(self.database, "database")
         _require_text(self.query_version, "query_version")
         if not self.objects or any(not name.strip() for name in self.objects):
@@ -146,6 +150,51 @@ class WarehouseSourceReader(Protocol):
 
     def read_store(self, request: WarehouseReadRequest) -> WarehouseReadResult:
         """Return raw mapping and campaign rows for exactly one store."""
+        ...
+
+
+# --- the PEPITO_HO UOM-mapping tier (#93) ------------------------------------
+
+
+@dataclass(frozen=True)
+class UomMappingReadRequest:
+    """The item set a caller needs mappings for, and its reproducible window.
+
+    ``ITEM_UOM_MAPPING_MST`` is central and has no store column, so the item
+    set is the only honest bound. Codes are trimmed and deduplicated in order;
+    an empty set is refused because an unbounded read of a central table is
+    never what a caller means.
+    """
+
+    item_codes: tuple[str, ...]
+    source_window: SourceWindow
+
+    def __post_init__(self) -> None:
+        cleaned: list[str] = []
+        for code in self.item_codes:
+            if not code.strip():
+                raise ValueError("item_codes must not contain a blank code")
+            if code.strip() not in cleaned:
+                cleaned.append(code.strip())
+        if not cleaned:
+            raise ValueError("item_codes must name at least one item")
+        object.__setattr__(self, "item_codes", tuple(cleaned))
+
+
+@dataclass(frozen=True)
+class UomMappingReadResult:
+    """Unfiltered UOM-mapping rows for the requested items, before domain rules."""
+
+    mappings: tuple[WarehouseRow, ...]
+    provenance: WarehouseProvenance
+
+
+@runtime_checkable
+class UomMappingSourceReader(Protocol):
+    """Read-only source port for the central PEPITO_HO tier (AD-002)."""
+
+    def read_mappings(self, request: UomMappingReadRequest) -> UomMappingReadResult:
+        """Return every raw mapping row for the requested item set."""
         ...
 
 

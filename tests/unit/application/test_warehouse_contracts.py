@@ -72,4 +72,5 @@ def test_read_request_and_provenance_retain_the_reproducible_window() -> None:
         "source_window_start": "2026-09-02T01:00:00+00:00",
         "source_window_end": "2026-09-02T02:00:00+00:00",
         "source_watermark": "2026-09-02T02:00:00+00:00",
+        "isolation_level": "READ COMMITTED",
     }

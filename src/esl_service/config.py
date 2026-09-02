@@ -439,6 +439,10 @@ class Settings(BaseSettings):
     source_sql_username: str = ""
     source_sql_driver: str = "ODBC Driver 18 for SQL Server"
     source_sql_trust_server_certificate: bool = True
+    # AD-020: every source database runs with snapshot isolation OFF, so reads
+    # default to READ COMMITTED; a DBA who enables snapshot isolation switches
+    # the tiers here. Recorded in every read's provenance.
+    source_sql_isolation_level: Literal["READ COMMITTED", "SNAPSHOT"] = "READ COMMITTED"
     source_warehouse_database: str = "DBWH_8555"
     legacy_baseline_database: str = "ESL"
     source_pepito_ho_host: str = ""
