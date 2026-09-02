@@ -8,14 +8,21 @@ to be complete incremental watermarks, so each call takes a transactional
 current-state snapshot and records the caller's window plus database UTC time.
 """
 
-from collections.abc import Iterator, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Protocol
 
-from sqlalchemy import Connection, Engine, create_engine, text
+from sqlalchemy import Connection, Engine, text
 from sqlalchemy.engine import URL
 
+from esl_service.adapters.sql_server import (
+    DEFAULT_ISOLATION_LEVEL,
+    create_read_only_engine,
+)
+from esl_service.adapters.sql_server import failure_signal as _failure_signal
+from esl_service.adapters.sql_server import source_text as _source_text
+from esl_service.adapters.sql_server import watermark as _watermark
 from esl_service.application.contracts import (
     SourceWindow,
     StoreDirectoryEntry,
@@ -25,12 +32,8 @@ from esl_service.application.contracts import (
     WarehouseReadResult,
 )
 from esl_service.config import Settings
-from esl_service.domain.failures import DependencyKind, FailureKind, FailureSignal
-from esl_service.runtime.connectivity import (
-    ProbeOutcome,
-    classify_failure,
-    targets_from_settings,
-)
+from esl_service.domain.failures import FailureSignal
+from esl_service.runtime.connectivity import targets_from_settings
 from esl_service.runtime.secrets import SecretProvider
 
 __all__ = [
@@ -53,7 +56,6 @@ _STORES = "SELECT ORG_CD, ORG_IP, ORG_DB FROM dbo.DimStore ORDER BY ORG_CD"
 _MAPPINGS = "SELECT * FROM dbo.DimItemMapping WHERE OID_ORG_CD = :store_code"
 _CAMPAIGNS = "SELECT * FROM dbo.FactCampaign WHERE FOR_ORGANIZATION = :store_code"
 
-_SCHEMA_SQLSTATE_PREFIXES = ("42",)
 
 
 @dataclass(frozen=True)
@@ -135,66 +137,12 @@ def build_read_only_url(url: URL) -> URL:
     return url.update_query_dict({"ApplicationIntent": "ReadOnly"})
 
 
-def create_warehouse_engine(url: URL) -> Engine:
-    """Create the shared-tier SQL Server engine with bounded connection time."""
+def create_warehouse_engine(
+    url: URL, *, isolation_level: str = DEFAULT_ISOLATION_LEVEL
+) -> Engine:
+    """Create the shared-tier SQL Server engine (AD-020 isolation, bounded connect)."""
 
-    return create_engine(
-        build_read_only_url(url),
-        connect_args={"timeout": 10},
-        isolation_level="SNAPSHOT",
-        pool_pre_ping=True,
-    )
-
-
-def _walk_errors(error: BaseException) -> Iterator[BaseException]:
-    seen: list[BaseException] = []
-    current: BaseException | None = error
-    while current is not None and current not in seen:
-        seen.append(current)
-        yield current
-        current = getattr(current, "orig", None) or current.__cause__
-
-
-def _is_schema_drift(error: BaseException) -> bool:
-    for current in _walk_errors(error):
-        sqlstate = getattr(current, "sqlstate", None)
-        first_arg = current.args[0] if current.args else None
-        for candidate in (sqlstate, first_arg):
-            if isinstance(candidate, str) and candidate.startswith(
-                _SCHEMA_SQLSTATE_PREFIXES
-            ):
-                return True
-    return False
-
-
-def _failure_signal(error: BaseException) -> FailureSignal:
-    if _is_schema_drift(error) or isinstance(error, (KeyError, TypeError, ValueError)):
-        return FailureSignal(DependencyKind.SOURCE_DATA, FailureKind.MALFORMED)
-
-    outcome = classify_failure(error)
-    if outcome is ProbeOutcome.CREDENTIAL_REJECTED:
-        return FailureSignal(DependencyKind.CREDENTIAL, FailureKind.EXPIRED)
-    if outcome is ProbeOutcome.DRIVER_MISSING:
-        return FailureSignal(DependencyKind.CONFIGURATION, FailureKind.MALFORMED)
-    return FailureSignal(DependencyKind.SQL_SERVER, FailureKind.UNAVAILABLE)
-
-
-def _watermark(value: object) -> datetime:
-    if not isinstance(value, datetime):
-        raise TypeError("warehouse source watermark is not a datetime")
-    if value.tzinfo is None or value.utcoffset() is None:
-        return value.replace(tzinfo=UTC)
-    return value.astimezone(UTC)
-
-
-def _source_text(row: Mapping[str, object], column: str) -> str:
-    value = row[column]
-    if not isinstance(value, str):
-        raise TypeError(f"warehouse {column} must be text")
-    normalized = value.strip()
-    if not normalized:
-        raise ValueError(f"warehouse {column} must not be blank")
-    return normalized
+    return create_read_only_engine(url, isolation_level=isolation_level)
 
 
 class WarehouseReader:
@@ -206,12 +154,14 @@ class WarehouseReader:
         *,
         instance: str,
         database: str,
+        isolation_level: str = DEFAULT_ISOLATION_LEVEL,
     ) -> None:
         if not instance.strip() or not database.strip():
             raise ValueError("warehouse instance and database must not be blank")
         self._executor = executor
         self._instance = instance
         self._database = database
+        self._isolation_level = isolation_level
 
     @classmethod
     def from_settings(
@@ -227,12 +177,14 @@ class WarehouseReader:
         if not target.configured():
             raise ValueError("warehouse target is not configured")
         engine = create_warehouse_engine(
-            target.sqlalchemy_url(secrets.get(target.password_key))
+            target.sqlalchemy_url(secrets.get(target.password_key)),
+            isolation_level=settings.source_sql_isolation_level,
         )
         return cls(
             SqlAlchemyWarehouseExecutor(engine),
             instance=target.host,
             database=target.database,
+            isolation_level=settings.source_sql_isolation_level,
         )
 
     def discover_stores(self, source_window: SourceWindow) -> StoreDiscoveryResult:
@@ -293,4 +245,5 @@ class WarehouseReader:
             source_window_start=source_window.start,
             source_window_end=source_window.end,
             source_watermark=source_watermark,
+            isolation_level=self._isolation_level,
         )
