@@ -75,6 +75,10 @@ This workflow applies to every GitHub issue and is usable by Codex, Claude, or a
     Confirm the local and remote `develop` SHAs match.
 9. Delete the issue worktree and its branch only after the branch is merged, local `develop` is updated, and a checkpoint in `docs/checkpoints/` records the merge commit and next step. The repository deletes the remote branch automatically on merge.
 
+### Local AIMS databases for adapter work
+
+Adapter work against AIMS (#24 and its successors) runs against a local clone of `AIMS_PORTAL_DB` and `AIMS_CORE_DB`, never against production. The procedure, the expected result, and every failure mode met while producing it are in [`docs/development/aims-local-clone.md`](development/aims-local-clone.md). Read it in full before dumping: the dump reads production AIMS and must run off-peak, and two of its failure modes look like different problems and are the same one.
+
 ### Cross-agent handoff rule
 
 Before changing chats or agents, add a checkpoint file to `docs/checkpoints/` containing: issue number/title, branch, commit SHA, exact completed scope, commands and results, uncommitted state, configuration variable names without values, external systems touched, unresolved risks, and the next smallest action. A new agent must read the most recent checkpoints before work.
