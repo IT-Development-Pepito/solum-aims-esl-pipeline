@@ -179,6 +179,23 @@ class LaunchRepository:
 
         return self._session.get(WorkflowSchedule, schedule_id)
 
+    def schedules_for_scope(
+        self, workflow_name: str, store_code: str | None
+    ) -> list[WorkflowSchedule]:
+        """Return every schedule of one workflow, or of one store within it.
+
+        The cutover fallback (#26) disables scheduling for a scope; it needs
+        the full set, enabled or not, so it can report what it changed and
+        what was already off.
+        """
+
+        statement = select(WorkflowSchedule).where(
+            WorkflowSchedule.workflow_name == workflow_name
+        )
+        if store_code is not None:
+            statement = statement.where(WorkflowSchedule.store_code == store_code)
+        return list(self._session.scalars(statement.order_by(WorkflowSchedule.store_code)))
+
     def set_schedule_enabled(
         self, schedule_id: UUID, *, enabled: bool, actor: str, reason: str
     ) -> WorkflowSchedule:
