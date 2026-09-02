@@ -57,9 +57,12 @@ The startup gate refuses an `ESL_DATABASE_URL` that still embeds a password, so 
 1. create the database accounts        esl_pipeline_*, esl_reader, esl_aims_reader
 2. create the bundle directory         C:\ProgramData\SOLUM\ESL, ACL: service account, Administrators, SYSTEM
 3. esl-admin secrets set  x 4          one command per key, see below
-4. esl-admin check-connections         every target must be REACHABLE or UNCONFIGURED
-5. start the service
+4. alembic upgrade head                migrates the state store; password comes from state.password
+5. esl-admin check-connections         every target must be REACHABLE or UNCONFIGURED
+6. start the service
 ```
+
+Step 4 needs no password in `ESL_DATABASE_URL`: Alembic resolves `state.password` from the bundle exactly as the service does. Until it has run, `secrets set` still stores the secret but warns that the audit entry could not be recorded because the schema is not migrated.
 
 Step 2 applies to staging and production. The tool refuses to write into a missing directory when a service identity is configured, because a folder it created itself would carry inherited permissions that the startup validator rejects. On a development machine, where no service identity is configured, `esl-admin` creates the directory for you and says so.
 
@@ -117,6 +120,7 @@ aims-core            REACHABLE            esl_aims_reader
 | `SECRET_UNAVAILABLE` | the bundle has no entry for that key | `esl-admin secrets set <key>` |
 | `CREDENTIAL_REJECTED` | the server answered and refused the password | the value in the bundle is wrong or the account's password changed; set it again |
 | `UNREACHABLE` | no answer from host, port, or database | route, firewall, hostname, or the database name |
+| `DRIVER_MISSING` | the ODBC driver named in `ESL_SOURCE_SQL_DRIVER` is not installed; the message names it | install the driver, or fix the setting — a value like `ODBC+Driver+18+for+SQL+Server` is URL-encoded and must be written with spaces |
 
 The command exits non-zero when any target is neither `REACHABLE` nor `UNCONFIGURED`, so it can run unattended. Output never contains a password or a connection string.
 

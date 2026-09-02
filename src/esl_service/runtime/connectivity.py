@@ -92,6 +92,9 @@ class ProbeOutcome(StrEnum):
     CREDENTIAL_REJECTED = "CREDENTIAL_REJECTED"
     SECRET_UNAVAILABLE = "SECRET_UNAVAILABLE"
     UNCONFIGURED = "UNCONFIGURED"
+    #: The ODBC driver named in configuration is not installed. Raised before
+    #: any network activity, so it is not a route fault and is reported apart.
+    DRIVER_MISSING = "DRIVER_MISSING"
 
 
 #: Fixed, safe wording per outcome. Never the exception text, and never a
@@ -205,6 +208,9 @@ def classify_failure(error: BaseException) -> ProbeOutcome:
         sqlstate = getattr(current, "sqlstate", None)
         first_arg = current.args[0] if current.args else None
         message = str(current).casefold()
+        # ODBC's "no such driver": pyodbc puts IM002 in args[0] and in the text.
+        if sqlstate == "IM002" or first_arg == "IM002" or "[im002]" in message:
+            return ProbeOutcome.DRIVER_MISSING
         if (
             sqlstate in _CREDENTIAL_SQLSTATES
             or first_arg in _CREDENTIAL_SQLSTATES
@@ -238,7 +244,12 @@ def probe(target: ConnectionTarget, secrets: SecretProvider, connector: Connecto
     # because it commonly contains the connection string.
     except Exception as error:  # noqa: BLE001
         outcome = classify_failure(error)
-        return ProbeResult(target.name, outcome, detail=_DETAIL[outcome])
+        if outcome is ProbeOutcome.DRIVER_MISSING:
+            # The name is the diagnosis: a stray '+' or a typo shows at once.
+            detail = f"ODBC driver {target.driver!r} is not installed on this machine"
+        else:
+            detail = _DETAIL[outcome]
+        return ProbeResult(target.name, outcome, detail=detail)
     return ProbeResult(target.name, ProbeOutcome.REACHABLE, identity=identity)
 
 
@@ -250,6 +261,7 @@ _HEALTH_STATE = {
     ProbeOutcome.UNREACHABLE: HealthState.UNAVAILABLE,
     ProbeOutcome.CREDENTIAL_REJECTED: HealthState.UNAVAILABLE,
     ProbeOutcome.SECRET_UNAVAILABLE: HealthState.UNAVAILABLE,
+    ProbeOutcome.DRIVER_MISSING: HealthState.UNAVAILABLE,
 }
 
 

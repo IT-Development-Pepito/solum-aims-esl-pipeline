@@ -48,7 +48,7 @@ def configured(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setattr(cli, "_codec", Base64Codec)
     monkeypatch.setattr(cli, "_protector", NoopProtector)
     monkeypatch.setattr(cli, "_current_sid", lambda: "S-1-5-21-1-2-3-1001")
-    monkeypatch.setattr(cli, "_record_audit", lambda **_: True)
+    monkeypatch.setattr(cli, "_record_audit", lambda **_: None)
     env = {
         "ESL_ENVIRONMENT": "development",
         "ESL_DATABASE_URL": "postgresql+psycopg://esl_dev@localhost:5432/esl_pipeline_dev",

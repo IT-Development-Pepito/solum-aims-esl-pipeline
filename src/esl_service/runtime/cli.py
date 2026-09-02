@@ -18,6 +18,7 @@ bundle, ACL, or database.
 import os
 import sys
 from collections.abc import Callable
+from enum import StrEnum
 from pathlib import Path
 from typing import Annotated
 
@@ -31,6 +32,7 @@ from esl_service.runtime.connectivity import (
     ProbeOutcome,
     ProbeResult,
     SqlAlchemyConnector,
+    classify_failure,
     parse_target,
     probe,
     targets_from_settings,
@@ -69,6 +71,47 @@ _current_sid: Callable[[], str] = current_process_sid
 _connector: Callable[[], Connector] = SqlAlchemyConnector
 
 
+class AuditFailure(StrEnum):
+    """Why an audit entry could not be recorded. Each value has a remedy."""
+
+    NO_SETTINGS = "NO_SETTINGS"
+    CONFIGURATION = "CONFIGURATION"
+    SECRET_UNAVAILABLE = "SECRET_UNAVAILABLE"
+    CREDENTIAL_REJECTED = "CREDENTIAL_REJECTED"
+    SCHEMA_NOT_MIGRATED = "SCHEMA_NOT_MIGRATED"
+    UNREACHABLE = "UNREACHABLE"
+
+
+#: PostgreSQL undefined_table: the store answered, the tables are not there.
+_UNDEFINED_TABLE = "42P01"
+
+
+def classify_audit_failure(error: BaseException) -> AuditFailure:
+    """Turn the exception from an audit attempt into an actionable cause.
+
+    A store that answers but lacks the schema is the case found in use, and
+    it must not read as "unavailable": the remedy is a migration, not a
+    network check. The driver's text is never used, only its SQLSTATE.
+    """
+
+    if isinstance(error, SecretUnavailableError):
+        return AuditFailure.SECRET_UNAVAILABLE
+    if isinstance(error, ValueError):
+        return AuditFailure.CONFIGURATION
+
+    seen: list[BaseException] = []
+    current: BaseException | None = error
+    while current is not None and current not in seen:
+        seen.append(current)
+        if getattr(current, "sqlstate", None) == _UNDEFINED_TABLE:
+            return AuditFailure.SCHEMA_NOT_MIGRATED
+        current = getattr(current, "orig", None) or current.__cause__
+
+    if classify_failure(error) is ProbeOutcome.CREDENTIAL_REJECTED:
+        return AuditFailure.CREDENTIAL_REJECTED
+    return AuditFailure.UNREACHABLE
+
+
 def _record_audit(
     *,
     actor: str,
@@ -77,15 +120,16 @@ def _record_audit(
     resource_key: str,
     settings: Settings | None,
     bundle: Path,
-) -> bool:
+) -> AuditFailure | None:
     """Append an audit entry naming who, what, and why. Never the value.
 
     Best effort by design: provisioning may run before the state store is
     reachable at all, since the store's own password is provisioned this way.
+    Returns None when recorded, otherwise the classified cause.
     """
 
     if settings is None:
-        return False
+        return AuditFailure.NO_SETTINGS
     try:
         from esl_service.persistence.db import create_session_factory_from_settings
         from esl_service.persistence.reconciliation_repository import (
@@ -105,9 +149,9 @@ def _record_audit(
                 outcome="APPLIED",
             )
             session.commit()
-    except Exception:  # noqa: BLE001 - the state store may simply be down
-        return False
-    return True
+    except Exception as error:  # noqa: BLE001 - classified, never echoed
+        return classify_audit_failure(error)
+    return None
 
 
 # --- shared helpers --------------------------------------------------------
@@ -202,10 +246,39 @@ def _refuse_filesystem(path: Path) -> None:
     raise typer.Exit(code=1)
 
 
+#: One remedy per cause. A warning that cannot be acted on is not a warning.
+_AUDIT_REMEDY = {
+    AuditFailure.NO_SETTINGS: (
+        "the configuration could not be loaded, so no state store is known. "
+        "Set the ESL_* variables, or ignore this on a machine that only provisions."
+    ),
+    AuditFailure.CONFIGURATION: (
+        "ESL_DATABASE_URL still embeds a password. Remove it and provision "
+        "state.password in the bundle instead (AD-017)."
+    ),
+    AuditFailure.SECRET_UNAVAILABLE: (
+        "the bundle has no state.password key yet. Run "
+        "`esl-admin secrets set state.password` first."
+    ),
+    AuditFailure.CREDENTIAL_REJECTED: (
+        "the state store refused the state.password value in the bundle. "
+        "Set it again with the account's current password."
+    ),
+    AuditFailure.SCHEMA_NOT_MIGRATED: (
+        "the state store answered but its schema is not migrated. Run "
+        "`alembic upgrade head` against ESL_DATABASE_URL."
+    ),
+    AuditFailure.UNREACHABLE: (
+        "could not reach the state store named in ESL_DATABASE_URL. "
+        "Check the host, port, and database with `esl-admin check-connections`."
+    ),
+}
+
+
 def _audit_or_warn(
     *, action: str, reason: str, name: str, settings: Settings | None, bundle: Path
 ) -> None:
-    recorded = _record_audit(
+    failure = _record_audit(
         actor=current_user_name(),
         action=action,
         reason=reason,
@@ -213,8 +286,11 @@ def _audit_or_warn(
         settings=settings,
         bundle=bundle,
     )
-    if not recorded:
-        typer.echo("Warning: audit entry could not be recorded; the state store is unavailable.")
+    if failure is not None:
+        typer.echo(
+            f"Warning: audit entry could not be recorded: {_AUDIT_REMEDY[failure]} "
+            "The secret itself was stored."
+        )
 
 
 BundleOption = Annotated[

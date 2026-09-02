@@ -207,8 +207,9 @@ Do this once per environment, before the service is started for the first time. 
 
 1. Create the database accounts: the state-store user named in `ESL_DATABASE_URL`, the read-only SQL Server account (`esl_reader`) that every SQL Server tier shares, and the read-only AIMS account (`esl_aims_reader`). In staging and production also create the bundle directory, `C:\ProgramData\SOLUM\ESL` by default, as an administrator with an ACL limited to the service account, Administrators, and SYSTEM; the tool refuses to write into a missing directory when a service identity is configured, because a folder it created itself would carry inherited permissions the startup validator rejects. On a development machine the tool creates the directory and says so.
 2. Provision the four bundle keys with **`esl-admin secrets set <key> --reason <ticket>`**, one command per key, typing each value at the hidden prompt. In staging and production run this **as the Windows Service account**; the tool refuses any other account when `ESL_SERVICE_IDENTITY_SID` is configured, because under user-scope DPAPI (AD-017) a bundle written by another account is unreadable by the service. On a development machine the variable is unset and the tool proceeds under your own account after saying so.
-3. Prove every value with **`esl-admin check-connections`**. Every target must be `REACHABLE`, or `UNCONFIGURED` for a tier deliberately not in use yet. `CREDENTIAL_REJECTED` means the bundle value is wrong; `SECRET_UNAVAILABLE` means a key was not set.
-4. Start the service.
+3. Migrate the state store with **`alembic upgrade head`**. Alembic resolves the password the same way the service does, from `state.password` in the bundle, so `ESL_DATABASE_URL` needs no password here either. Until this step is done, `secrets set` stores the secret but warns that the audit entry could not be recorded because the schema is not migrated.
+4. Prove every value with **`esl-admin check-connections`**. Every target must be `REACHABLE`, or `UNCONFIGURED` for a tier deliberately not in use yet. `CREDENTIAL_REJECTED` means the bundle value is wrong; `SECRET_UNAVAILABLE` means a key was not set; `DRIVER_MISSING` names an ODBC driver that is not installed, or a driver setting still in URL-encoded form with `+` instead of spaces.
+5. Start the service.
 
 | Key | Password of | Database |
 | --- | --- | --- |
