@@ -21,7 +21,7 @@ at the wrong time and look configured while doing it.
 """
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import StrEnum
 from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -338,3 +338,52 @@ def build_scheduled_execution(
         configuration_version_id=configuration_version_id,
         rule_version=rule_version,
     )
+
+
+# --- the reproducible window of a scheduled run (FR-002, #28) ----------------
+
+#: How far back a cadence is walked for its previous instant. A year covers
+#: every cadence the five-field subset can express except a leap-day one.
+PREVIOUS_INSTANT_SEARCH_LIMIT = timedelta(days=366)
+
+
+class NoPreviousCadenceInstant(ValueError):
+    """Raised when a cadence has no earlier instant within the search limit."""
+
+
+def previous_cadence_instant(schedule: ScheduleDefinition, instant: datetime) -> datetime:
+    """Return the cadence instant immediately before ``instant``.
+
+    The owner's decision (2026-09-02): a scheduled run's source window runs
+    from the previous instant on its own cadence to the instant it launches
+    at. The walk is minute by minute in the schedule's timezone, so the night
+    gap of ``*/30 7-23`` is crossed correctly and a replay recomputes the same
+    window from the cron expression alone. Seconds are zeroed so consecutive
+    windows abut exactly.
+    """
+
+    if instant.tzinfo is None or instant.utcoffset() is None:
+        raise ValueError("instant must be timezone-aware")
+    local = instant.astimezone(schedule.zone).replace(second=0, microsecond=0)
+    if not schedule.cadence.matches(local):
+        raise ValueError(f"{instant.isoformat()} is not on the cadence {schedule.cron_expression!r}")
+
+    limit = local - PREVIOUS_INSTANT_SEARCH_LIMIT
+    candidate = local - timedelta(minutes=1)
+    while candidate >= limit:
+        if schedule.cadence.matches(candidate):
+            return candidate.astimezone(instant.tzinfo)
+        candidate -= timedelta(minutes=1)
+    raise NoPreviousCadenceInstant(
+        f"no instant of {schedule.cron_expression!r} within "
+        f"{PREVIOUS_INSTANT_SEARCH_LIMIT.days} days before {instant.isoformat()}"
+    )
+
+
+def scheduled_source_window(
+    schedule: ScheduleDefinition, instant: datetime
+) -> tuple[datetime, datetime]:
+    """Return ``(start, end)`` for the run a schedule launches at ``instant``."""
+
+    end = instant.replace(second=0, microsecond=0)
+    return previous_cadence_instant(schedule, instant), end

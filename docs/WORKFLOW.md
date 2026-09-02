@@ -120,16 +120,16 @@ Every manual operation in this section is authorized under the two-role model of
 
 ### Check service and dependency status
 
-1. Use **`<target-service status>`** to confirm process health and current version.
-2. Use **`<target-service health>`** to inspect liveness, readiness, SQL Server, AIMS API, compatibility-read, state-store, filesystem-consumer, and telemetry dependencies.
+1. Run **`esl-admin status`** on the host. It prints `ready: yes|no` and one line per dependency (`state-store`, `warehouse`, `legacy-baseline`, `pepito-ho`, `aims-portal`, `aims-core`) with its state and whether it is required; the exit code is non-zero when not ready, so it can run unattended.
+2. From a monitor, use **`GET /health/live`** and **`GET /health/ready`** on `ESL_INTERNAL_HOST:ESL_INTERNAL_PORT`. Neither needs a token; readiness answers `503` with the same dependency list when new work cannot be accepted. AIMS API, filesystem-consumer, and telemetry dependencies are not probed yet because those adapters do not exist.
 3. If readiness is false, do not manually trigger work. Capture the execution/health evidence and resolve or escalate the failed dependency.
 
 Expected implementation outcome: liveness indicates the process is running; readiness indicates new work can be accepted safely; dependency health identifies degraded external systems without leaking secrets. Status and run-event data must be queryable from the target database by execution ID, workflow, store, and time range.
 
 ### Check workflow status and find failures
 
-1. Query **`<target-service runs list --workflow <name> --store <code> --from <time> --to <time>>`**.
-2. Select the execution ID and inspect **`<target-service runs show <execution-id>>`**.
+1. Query **`esl-admin runs list --workflow <name> --store <code> --from <iso-instant> --to <iso-instant>`** (instants carry an offset, e.g. `2026-09-02T07:00:00+07:00`; at least one selector is required), or **`GET /runs?workflow_name=&store_code=&started_from=&started_to=`** with a bearer token.
+2. Select the execution ID and inspect **`esl-admin runs show <execution-id>`** or **`GET /runs/{execution-id}`**.
 3. Review terminal state, failed step, retry count, timeout/error class, configuration/rule version, checkpoint, source window, and affected-record counts.
 4. Query the target database's structured execution/event logs and open correlated metrics using the execution ID. Do not treat a missing log line as evidence an external action did not occur.
 
@@ -143,7 +143,7 @@ Expected implementation outcome: liveness indicates the process is running; read
 ### Manually trigger a workflow
 
 1. Verify readiness and that the schedule is not already owning the same scope.
-2. Submit **`<target-service run start --workflow <name> --store <code> --window <bounded-window> --reason <ticket>>`**.
+2. Submit **`esl-admin runs start --workflow <name> --store <code> --window-start <iso-instant> --window-end <iso-instant> --reason <ticket>`** as an account holding the `operator` or `admin` role, or **`POST /runs`** with the same fields as JSON and a bearer token. The run is created in the mode configuration dictates (`ESL_SHADOW_MODE`), under the active configuration version and rule version; nothing executes it yet, because no workflow runner exists until the source adapters land (#91 to #94).
 3. Record the execution ID in the change/incident ticket.
 4. Monitor until terminal state and perform reconciliation.
 
@@ -152,7 +152,7 @@ The implementation rejects an overlapping scope; it must not run two owners conc
 ### Retry a failed run
 
 1. Inspect error classification and the last external action.
-2. For retryable failures, use **`<target-service run retry <execution-id> --reason <ticket>>`**.
+2. For retryable failures, use **`esl-admin runs retry <execution-id> --reason <ticket>`** or **`POST /runs/{execution-id}/retry`**. Only a `FAILED` run without an unresolved external action is accepted; the refusal reason is printed otherwise.
 3. For an ambiguous AIMS submission, run reconciliation first; retry only unresolved idempotency keys.
 4. For malformed data/configuration or AIMS rejection, correct through the approved business/configuration process, then create a recorded replay.
 
@@ -160,7 +160,7 @@ The implementation rejects an overlapping scope; it must not run two owners conc
 
 1. Obtain business/data-owner approval for store and exact time/key range.
 2. Confirm replay effect and that no higher-priority active workflow owns the scope.
-3. Use **`<target-service run replay --workflow <name> --store <code> --window <start..end> --reason <ticket>>`**.
+3. Use **`esl-admin runs replay <execution-id> --window-start <iso-instant> --window-end <iso-instant> --reason <ticket>`** or **`POST /runs/{execution-id}/replay`**. The replay inherits the workflow, store, and mode of the original run and carries exactly the window given; both bounds are mandatory.
 4. Reconcile the replay against original and target outcomes; preserve both audit trails.
 
 ### Determine whether data reached AIMS
@@ -199,7 +199,7 @@ Submitted is an in-flight observation, not a terminal category. A submitted acti
 
 ### Disable and re-enable scheduling
 
-1. Use **`<target-service schedules disable --workflow <name> --reason <ticket>>`**; do not stop the service merely to disable one workflow.
+1. Use **`esl-admin schedules disable <schedule-id> --reason <ticket>`** (admin role) or **`POST /schedules/{schedule-id}/disable`**; re-enable with `enable`. Do not stop the service merely to disable one workflow. To stop *all* scheduling while the process keeps serving status, pause the scheduler instead: **`POST /scheduler/pause`** with a reason (admin), or `sc.exe pause <service>` on the host; both are audited as `scheduler.paused` / `service.paused`.
 2. Confirm the schedule status and existing run ownership.
 3. Allow/stop in-flight runs only through the documented graceful-cancel procedure; never kill a process before recording recovery state.
 4. Resolve/reconcile outstanding work.
@@ -257,6 +257,26 @@ Stored secret 'state.password' in C:\ProgramData\SOLUM\ESL\secrets.dpapi.
 1. Run **`esl-admin check-connections`**. It probes the state store from configuration and any extra target given as `--target name=postgresql://user@host:port/db#bundle.key` or `--target name=sqlserver://user@host/db#bundle.key`. The part after `#` is a bundle key, never a password; an inline password is rejected.
 2. Read the outcome per target: `REACHABLE` with the identity the server reports; `UNREACHABLE` means no answer from the host, port, or database; `CREDENTIAL_REJECTED` means the server answered and refused the credential; `SECRET_UNAVAILABLE` means the key is not in the bundle; `UNCONFIGURED` means the target has no host, database, or username yet and is not counted as a failure.
 3. The exit code is non-zero when any target is neither `REACHABLE` nor `UNCONFIGURED`, so the check can run unattended. Output never contains a connection string or a password; driver error text is dropped because it commonly embeds both.
+
+### Provision an API token
+
+The internal API authenticates with per-account bearer tokens held in the DPAPI bundle (AD-019). One token per account, under the key `api.token.<account>`, where `<account>` is the bare Windows account name exactly as `ESL_OPERATOR_ROLES` names it.
+
+1. Generate a token of at least 32 random bytes on the host, for example `python -c "import secrets; print(secrets.token_urlsafe(32))"`. Hand it to the account holder through the approved channel; it is never printed by the service.
+2. Store it, as the service account: **`esl-admin secrets set api.token.<account> --reason <ticket>`**, pasting the token at the hidden prompt.
+3. Assign the account a role in `ESL_OPERATOR_ROLES`; a token without a role authenticates and is then refused for every operation, with the refusal audited under that account.
+4. Restart the service, or wait for the next start: tokens are read from the bundle when the host builds its authenticator.
+5. Revoke with **`esl-admin secrets remove api.token.<account> --reason <ticket>`** and a restart.
+
+Calls carry `Authorization: Bearer <token>`. A missing or unknown token is `401` and is never logged; a role refusal is `403` and is already in `audit_entry`.
+
+### Install and control the Windows Service
+
+1. Deploy the approved artifact and create the virtual environment on the host (NFR-016). Set the production variables for the service account, including `ESL_INTERNAL_HOST`, `ESL_INTERNAL_PORT`, `ESL_OPERATOR_ROLES`, `ESL_SERVICE_IDENTITY_SID`, and `ESL_WINDOWS_SERVICE_NAME`.
+2. Write the bundle as the service account (previous sections), including `state.password` and every `api.token.<account>`.
+3. As an administrator run **`.\scripts\install-service.ps1 -PythonExe <venv>\Scripts\python.exe -ServiceAccount <account>`**. It registers `ESL_WINDOWS_SERVICE_NAME` (default `SOLUM_ESL_PIPELINE`) with automatic start; the password prompt is not stored.
+4. Control it with `sc.exe start|stop|pause|continue <service>`. Start registers the active configuration version, resumes scheduling, and starts the API listener bound to `ESL_INTERNAL_HOST:ESL_INTERNAL_PORT`. Pause quiesces scheduling and keeps the process answering status. Stop pauses scheduling first, then stops the tick loop within its deadline; if the loop misses the deadline the `service.stopped` audit entry says so. Every transition is audited under the `service` actor.
+5. For development and diagnostics run the same host in the foreground with **`esl-admin serve`** under your own account; Ctrl+C stops it through the same lifecycle.
 
 ### Restart the service
 

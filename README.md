@@ -34,6 +34,8 @@ The bundle on disk is ciphertext. You never edit it by hand. You populate it wit
 
 One read-only account covers every SQL Server tier, so one key serves all of them, including per-store servers whose addresses are read from `DimStore` at run time.
 
+A fifth kind of key is not a password: `api.token.<account>` holds the bearer token one account uses to call the internal operations API (#28, AD-019). Provision it the same way, `esl-admin secrets set api.token.<account> --reason <ticket>`, and give the account a role in `ESL_OPERATOR_ROLES`; see `docs/WORKFLOW.md`, "Provision an API token".
+
 ### Raw or encoded?
 
 There are exactly two places a password can go, and the rule is different for each.
