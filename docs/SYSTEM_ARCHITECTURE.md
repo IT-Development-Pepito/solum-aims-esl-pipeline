@@ -127,6 +127,8 @@ flowchart TB
 | Reconciliation service | Compare expected, processed, rejected, promotion-anomaly, submitted, acknowledged, and unresolved records; retain candidate/selection evidence. | Retry external actions without orchestration policy or suppress unresolved ambiguity. |
 | Observability/configuration | Correlated telemetry, health, validated external configuration/secrets references. | Store plaintext secrets in logs or repository. |
 
+For the `DBWH_8555` warehouse tier, the read contract is a transactional current-state snapshot scoped by store. The SQL Server connection must support transaction-level `SNAPSHOT` isolation; the adapter fails safely rather than falling back to statement-level `READ COMMITTED`, which could mix source states across the mapping and campaign reads. `DimItemMapping.LAST_MODIFIED` and `FactCampaign.LASTUPDATED` are retained as raw evidence but are not accepted as extraction watermarks because the supplied current-system evidence does not establish that either column is complete and reliable for incremental reads. The caller's source window and the database read timestamp are recorded as provenance; every campaign status/type/validity/PFS predicate remains in the domain layer so rejected rows are not discarded by SQL (FR-001, FR-002, FR-025, FR-026; issue #91).
+
 ## 5. Authoritative target data model
 
 ### 5.1 Authority, status, and ownership
