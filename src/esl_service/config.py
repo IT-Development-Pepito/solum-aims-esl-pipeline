@@ -447,6 +447,10 @@ class Settings(BaseSettings):
     legacy_baseline_database: str = "ESL"
     source_pepito_ho_host: str = ""
     source_pepito_ho_database: str = "PEPITO_HO"
+    # Per-store fan-out bounds (#92). Provisional operational defaults, not
+    # measured targets (NFR-004): review against a workload baseline.
+    source_store_concurrency: int = Field(default=4, ge=1, le=32)
+    source_store_read_timeout_seconds: int = Field(default=120, ge=1)
     aims_host: str = ""
     aims_port: int = 5432
     aims_portal_database: str = ""

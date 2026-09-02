@@ -78,9 +78,24 @@ def is_schema_drift(error: BaseException) -> bool:
     return False
 
 
+#: ODBC timeout SQLSTATEs: query timeout expired, connection timeout expired.
+TIMEOUT_SQLSTATES = ("HYT00", "HYT01")
+
+
+def is_timeout(error: BaseException) -> bool:
+    for current in walk_errors(error):
+        sqlstate = getattr(current, "sqlstate", None)
+        first_arg = current.args[0] if current.args else None
+        if any(candidate in TIMEOUT_SQLSTATES for candidate in (sqlstate, first_arg)):
+            return True
+    return False
+
+
 def failure_signal(error: BaseException) -> FailureSignal:
     """Map a driver or shape failure onto an existing #20 signal, never its text."""
 
+    if is_timeout(error):
+        return FailureSignal(DependencyKind.SQL_SERVER, FailureKind.TIMEOUT)
     if is_schema_drift(error) or isinstance(error, KeyError | TypeError | ValueError):
         return FailureSignal(DependencyKind.SOURCE_DATA, FailureKind.MALFORMED)
 
