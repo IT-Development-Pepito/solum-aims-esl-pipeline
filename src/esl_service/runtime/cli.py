@@ -33,7 +33,7 @@ from esl_service.runtime.connectivity import (
     SqlAlchemyConnector,
     parse_target,
     probe,
-    state_store_target,
+    targets_from_settings,
 )
 from esl_service.runtime.identity import (
     IdentityVerdict,
@@ -70,7 +70,13 @@ _connector: Callable[[], Connector] = SqlAlchemyConnector
 
 
 def _record_audit(
-    *, actor: str, action: str, reason: str, resource_key: str, settings: Settings | None
+    *,
+    actor: str,
+    action: str,
+    reason: str,
+    resource_key: str,
+    settings: Settings | None,
+    bundle: Path,
 ) -> bool:
     """Append an audit entry naming who, what, and why. Never the value.
 
@@ -81,12 +87,15 @@ def _record_audit(
     if settings is None:
         return False
     try:
-        from esl_service.persistence.db import create_session_factory
+        from esl_service.persistence.db import create_session_factory_from_settings
         from esl_service.persistence.reconciliation_repository import (
             ReconciliationRepository,
         )
 
-        with create_session_factory(settings.database_url)() as session:
+        factory = create_session_factory_from_settings(
+            settings, BundleSecretProvider(bundle, _codec())
+        )
+        with factory() as session:
             ReconciliationRepository(session).append_audit_entry(
                 actor=actor,
                 action=action,
@@ -153,13 +162,16 @@ def _store(bundle: Path, sid: str | None) -> SecretBundleStore:
     )
 
 
-def _audit_or_warn(*, action: str, reason: str, name: str, settings: Settings | None) -> None:
+def _audit_or_warn(
+    *, action: str, reason: str, name: str, settings: Settings | None, bundle: Path
+) -> None:
     recorded = _record_audit(
         actor=current_user_name(),
         action=action,
         reason=reason,
         resource_key=name,
         settings=settings,
+        bundle=bundle,
     )
     if not recorded:
         typer.echo("Warning: audit entry could not be recorded; the state store is unavailable.")
@@ -208,7 +220,9 @@ def secrets_set(
         raise typer.Exit(code=1) from None
 
     typer.echo(f"Stored secret '{name}' in {path}.")
-    _audit_or_warn(action="secret.set", reason=reason, name=name, settings=settings)
+    _audit_or_warn(
+        action="secret.set", reason=reason, name=name, settings=settings, bundle=path
+    )
 
 
 @secrets_app.command("remove")
@@ -233,7 +247,9 @@ def secrets_remove(
         raise typer.Exit(code=1)
 
     typer.echo(f"Removed secret '{name}' from {path}.")
-    _audit_or_warn(action="secret.removed", reason=reason, name=name, settings=settings)
+    _audit_or_warn(
+        action="secret.removed", reason=reason, name=name, settings=settings, bundle=path
+    )
 
 
 @secrets_app.command("list")
@@ -273,9 +289,11 @@ def check_connections(
     settings = _load_settings()
     path = _bundle_path(bundle, settings)
 
-    targets: list[ConnectionTarget] = []
-    if settings is not None:
-        targets.append(state_store_target(settings.database_url))
+    # Every tier configuration names, configured or not, so a gap is listed
+    # rather than silently absent (#78). --target adds ad-hoc extras.
+    targets: list[ConnectionTarget] = (
+        list(targets_from_settings(settings)) if settings is not None else []
+    )
     for spec in target or []:
         try:
             targets.append(parse_target(spec))

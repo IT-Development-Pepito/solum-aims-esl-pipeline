@@ -27,7 +27,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Protocol
 
-from esl_service.config import Settings
+from esl_service.config import ConfigurationProblem, Settings
 
 #: Names appear in audit entries and on screen, so they stay unambiguous.
 SECRET_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
@@ -246,3 +246,47 @@ class SecretBundleStore:
         except BaseException:
             temporary.unlink(missing_ok=True)
             raise
+
+
+# --- fixed bundle keys (#78) -------------------------------------------------
+
+#: The service's own PostgreSQL state store.
+STATE_PASSWORD_KEY = "state.password"
+#: One read-only account covers every SQL Server tier, confirmed by the owner.
+SOURCE_SQL_PASSWORD_KEY = "source.sql.password"
+AIMS_PORTAL_PASSWORD_KEY = "aims.portal.password"
+AIMS_CORE_PASSWORD_KEY = "aims.core.password"
+
+#: Fixed wording for a missing secret. Never the provider's own message, which
+#: may name the bundle path.
+SECRET_PROBLEM_MESSAGE = "secret is unavailable in the bundle"
+
+
+def describe_secret_problems(
+    settings: Settings, provider: SecretProvider
+) -> tuple[ConfigurationProblem, ...]:
+    """Name every configured target whose bundle key cannot be read (FR-025).
+
+    Mirrors ``describe_configuration_problems``: one problem per key, the key
+    only, and a fixed message. A shared key is reported once even though three
+    tiers use it, and an unconfigured tier is not checked because it has
+    nothing to read.
+    """
+
+    # Imported here because connectivity imports this module for its types.
+    from esl_service.runtime.connectivity import targets_from_settings
+
+    keys: list[str] = []
+    for target in targets_from_settings(settings):
+        if target.configured() and target.password_key not in keys:
+            keys.append(target.password_key)
+
+    problems: list[ConfigurationProblem] = []
+    for key in keys:
+        try:
+            provider.get(key)
+        except SecretUnavailableError:
+            problems.append(
+                ConfigurationProblem(key=f"secret.{key}", message=SECRET_PROBLEM_MESSAGE)
+            )
+    return tuple(problems)
