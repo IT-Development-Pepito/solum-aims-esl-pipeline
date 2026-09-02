@@ -1,9 +1,11 @@
-"""Adapter ports for AIMS (FR-018, FR-020, AD-002, AD-003).
+"""Application-layer ports for external source and action adapters (AD-002).
 
-AIMS is vendor-owned. Everything the service needs from it is expressed here
-as a port -- a typed request, a typed outcome, and a Protocol -- so domain and
-orchestration code never depends on a transport, and a vendor change is
-absorbed by an adapter rather than by business rules (NFR-010).
+Everything the service needs from an external system is expressed here as a
+typed request, typed result, and Protocol so domain and orchestration code
+never depends on transport details (NFR-010). The read-only `DBWH_8555` port
+retains raw warehouse rows and safe provenance (FR-001, FR-002, FR-025,
+FR-026). AIMS remains a separate vendor-owned boundary (FR-018, FR-020,
+AD-003).
 
 Outcomes are stated in the domain's own vocabulary: ``DeliveryCertainty`` for
 reconciliation (FR-021) and ``FailureSignal`` for classification and retry
@@ -29,8 +31,9 @@ runtime exists yet, so adopting one is deferred to the adapter issue rather
 than decided here.
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Protocol, runtime_checkable
 
 from esl_service.domain.actions import DeliveryCertainty
@@ -42,6 +45,108 @@ def _require_text(value: str, name: str) -> None:
 
     if not value.strip():
         raise ValueError(f"{name} must not be blank")
+
+
+def _require_aware(value: datetime, name: str) -> None:
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError(f"{name} must be timezone-aware")
+
+
+@dataclass(frozen=True)
+class SourceWindow:
+    """The caller-selected source interval retained for replay and audit (FR-002)."""
+
+    start: datetime
+    end: datetime
+
+    def __post_init__(self) -> None:
+        _require_aware(self.start, "start")
+        _require_aware(self.end, "end")
+        if self.start > self.end:
+            raise ValueError("source window start must not follow end")
+
+
+@dataclass(frozen=True)
+class StoreDirectoryEntry:
+    """The verified DimStore fields needed to address one store source (FR-026)."""
+
+    store_code: str
+    org_ip: str
+    org_db: str
+
+    def __post_init__(self) -> None:
+        _require_text(self.store_code, "store_code")
+        _require_text(self.org_ip, "org_ip")
+        _require_text(self.org_db, "org_db")
+
+
+@dataclass(frozen=True)
+class WarehouseProvenance:
+    """Safe, persistence-ready evidence describing one warehouse snapshot."""
+
+    instance: str
+    database: str
+    objects: tuple[str, ...]
+    query_version: str
+    source_window_start: datetime
+    source_window_end: datetime
+    source_watermark: datetime
+
+    def __post_init__(self) -> None:
+        _require_text(self.instance, "instance")
+        _require_text(self.database, "database")
+        _require_text(self.query_version, "query_version")
+        if not self.objects or any(not name.strip() for name in self.objects):
+            raise ValueError("objects must contain non-blank source object names")
+        _require_aware(self.source_window_start, "source_window_start")
+        _require_aware(self.source_window_end, "source_window_end")
+        if self.source_window_start > self.source_window_end:
+            raise ValueError("source_window_start must not follow source_window_end")
+        _require_aware(self.source_watermark, "source_watermark")
+
+
+@dataclass(frozen=True)
+class WarehouseReadRequest:
+    """One store and one caller-approved reproducible source window."""
+
+    store_code: str
+    source_window: SourceWindow
+
+    def __post_init__(self) -> None:
+        _require_text(self.store_code, "store_code")
+
+
+WarehouseRow = Mapping[str, object]
+
+
+@dataclass(frozen=True)
+class StoreDiscoveryResult:
+    """The complete current warehouse store directory and its read evidence."""
+
+    stores: tuple[StoreDirectoryEntry, ...]
+    provenance: WarehouseProvenance
+
+
+@dataclass(frozen=True)
+class WarehouseReadResult:
+    """Unfiltered warehouse facts for one store, before domain evaluation."""
+
+    item_mappings: tuple[WarehouseRow, ...]
+    campaigns: tuple[WarehouseRow, ...]
+    provenance: WarehouseProvenance
+
+
+@runtime_checkable
+class WarehouseSourceReader(Protocol):
+    """Read-only source port for the shared DBWH_8555 tier (AD-002)."""
+
+    def discover_stores(self, source_window: SourceWindow) -> StoreDiscoveryResult:
+        """Return every current store routing row from DimStore."""
+        ...
+
+    def read_store(self, request: WarehouseReadRequest) -> WarehouseReadResult:
+        """Return raw mapping and campaign rows for exactly one store."""
+        ...
 
 
 @dataclass(frozen=True)
