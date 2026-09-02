@@ -1,10 +1,10 @@
 """Read-only DBWH_8555 adapter (#91, FR-001, FR-002, FR-025, FR-026)."""
 
 import inspect
-from collections.abc import Iterator, Mapping, Sequence
-from contextlib import contextmanager
+from collections.abc import Mapping, Sequence
+from contextlib import nullcontext
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from sqlalchemy import Engine
@@ -13,10 +13,13 @@ from sqlalchemy.engine import URL
 from esl_service.adapters import warehouse as warehouse_module
 from esl_service.adapters.warehouse import (
     WAREHOUSE_QUERY_VERSION,
-    SqlReadSession,
+    SqlAlchemyWarehouseExecutor,
+    WarehouseDirectoryRows,
     WarehouseReader,
     WarehouseReadError,
+    WarehouseStoreRows,
     build_read_only_url,
+    create_warehouse_engine,
 )
 from esl_service.application.contracts import (
     SourceWindow,
@@ -31,54 +34,106 @@ START = datetime(2026, 9, 2, 1, 0, tzinfo=UTC)
 END = datetime(2026, 9, 2, 2, 0, tzinfo=UTC)
 DATABASE_NOW = datetime(2026, 9, 2, 2, 0, 1, tzinfo=UTC)
 
+STORE_SCHEMA = "SELECT ORG_CD, ORG_IP, ORG_DB FROM dbo.DimStore WHERE 1 = 0"
+MAPPING_SCHEMA = "SELECT OID_ORG_CD FROM dbo.DimItemMapping WHERE 1 = 0"
+CAMPAIGN_SCHEMA = "SELECT FOR_ORGANIZATION FROM dbo.FactCampaign WHERE 1 = 0"
+READ_TIME = "SELECT SYSUTCDATETIME() AS source_watermark"
+STORES = "SELECT ORG_CD, ORG_IP, ORG_DB FROM dbo.DimStore ORDER BY ORG_CD"
+MAPPINGS = "SELECT * FROM dbo.DimItemMapping WHERE OID_ORG_CD = :store_code"
+CAMPAIGNS = "SELECT * FROM dbo.FactCampaign WHERE FOR_ORGANIZATION = :store_code"
 
-class FakeSession:
-    def __init__(self) -> None:
-        self.calls: list[tuple[str, Mapping[str, object] | None]] = []
 
-    def fetch_all(
-        self, statement: str, parameters: Mapping[str, object] | None = None
-    ) -> Sequence[Mapping[str, Any]]:
-        self.calls.append((statement, parameters))
-        if "DimStore" in statement and "WHERE 1 = 0" not in statement:
-            return (
-                {"ORG_CD": "084", "ORG_IP": "10.0.0.84", "ORG_DB": "STORE_084"},
-                {"ORG_CD": "085", "ORG_IP": "10.0.0.85", "ORG_DB": "STORE_085"},
-            )
-        if "DimItemMapping" in statement and "WHERE 1 = 0" not in statement:
-            return (
+class FakeExecutor:
+    def __init__(
+        self,
+        *,
+        directory_rows: Sequence[Mapping[str, object]] | None = None,
+        error: Exception | None = None,
+    ) -> None:
+        self.directory_rows = directory_rows or (
+            {"ORG_CD": "084", "ORG_IP": "10.0.0.84", "ORG_DB": "STORE_084"},
+            {"ORG_CD": "085", "ORG_IP": "10.0.0.85", "ORG_DB": "STORE_085"},
+        )
+        self.error = error
+        self.transactions = 0
+
+    def discover_stores(self) -> WarehouseDirectoryRows:
+        self.transactions += 1
+        if self.error is not None:
+            raise self.error
+        return WarehouseDirectoryRows(tuple(self.directory_rows), DATABASE_NOW)
+
+    def read_store(self, store_code: str) -> WarehouseStoreRows:
+        self.transactions += 1
+        if self.error is not None:
+            raise self.error
+        assert store_code == "084"
+        return WarehouseStoreRows(
+            item_mappings=(
                 {"OID_ORG_CD": "084", "OID_ITM_CD": "SKU-1", "OID_ITM_STATUS": "C"},
-            )
-        if "FactCampaign" in statement and "WHERE 1 = 0" not in statement:
-            return (
+            ),
+            campaigns=(
                 {
                     "FOR_ORGANIZATION": "084",
                     "CAMPAIGN_STATUS": "INACTIVE",
                     "PFS": "Y",
                     "CAMPAIGN_TYPE": "UNSUPPORTED-EVIDENCE",
                 },
-            )
-        return ()
-
-    def fetch_scalar(self, statement: str) -> object:
-        self.calls.append((statement, None))
-        return DATABASE_NOW
+            ),
+            source_watermark=DATABASE_NOW,
+        )
 
 
-class FakeExecutor:
+class RecordingResult:
     def __init__(
-        self, session: FakeSession | None = None, error: Exception | None = None
+        self,
+        rows: Sequence[Mapping[str, object]] = (),
+        scalar: object | None = None,
     ) -> None:
-        self.session = session or FakeSession()
-        self.error = error
-        self.transactions = 0
+        self._rows = rows
+        self._scalar = scalar
 
-    @contextmanager
-    def read_transaction(self) -> Iterator[SqlReadSession]:
-        self.transactions += 1
-        if self.error is not None:
-            raise self.error
-        yield self.session
+    def mappings(self) -> "RecordingResult":
+        return self
+
+    def __iter__(self) -> Any:
+        return iter(self._rows)
+
+    def scalar_one(self) -> object:
+        return self._scalar
+
+
+class RecordingConnection:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, Mapping[str, object]]] = []
+
+    def begin(self) -> Any:
+        return nullcontext()
+
+    def execute(
+        self, statement: object, parameters: Mapping[str, object] | None = None
+    ) -> RecordingResult:
+        sql = str(statement)
+        self.calls.append((sql, parameters or {}))
+        if sql == READ_TIME:
+            return RecordingResult(scalar=DATABASE_NOW)
+        if sql == STORES:
+            return RecordingResult(
+                ({"ORG_CD": "084", "ORG_IP": "10.0.0.84", "ORG_DB": "STORE_084"},)
+            )
+        if sql == MAPPINGS:
+            return RecordingResult(({"OID_ORG_CD": "084"},))
+        if sql == CAMPAIGNS:
+            return RecordingResult(({"FOR_ORGANIZATION": "084"},))
+        return RecordingResult()
+
+
+class RecordingEngine:
+    def __init__(self) -> None:
+        self.connection = RecordingConnection()
+
+    def connect(self) -> Any:
+        return nullcontext(self.connection)
 
 
 class DriverError(Exception):
@@ -119,9 +174,7 @@ def test_discovers_every_store_dynamically_and_records_provenance() -> None:
     assert executor.transactions == 1
 
 
-def test_reads_raw_rows_for_one_store_in_one_transaction_without_business_filters() -> (
-    None
-):
+def test_reads_raw_rows_for_one_store_in_one_transaction() -> None:
     executor = FakeExecutor()
     request = WarehouseReadRequest("084", SourceWindow(START, END))
 
@@ -139,28 +192,47 @@ def test_reads_raw_rows_for_one_store_in_one_transaction_without_business_filter
     )
     assert executor.transactions == 1
 
-    statements = "\n".join(statement for statement, _ in executor.session.calls)
-    folded = statements.casefold()
-    assert all(
-        statement.lstrip().casefold().startswith("select")
-        for statement, _ in executor.session.calls
-    )
-    assert "oid_org_cd = :store_code" in folded
-    assert "for_organization = :store_code" in folded
-    for forbidden in (
-        "oid_itm_status =",
-        "campaign_status =",
-        "campaign_type =",
-        "pfs =",
-        "last_modified >",
-        "lastupdated >",
-        "getdate(",
-    ):
-        assert forbidden not in folded
-    assert all(
-        parameters in (None, {"store_code": "084"})
-        for _, parameters in executor.session.calls
-    )
+
+def test_concrete_executor_emits_only_the_exact_approved_selects() -> None:
+    engine = RecordingEngine()
+    executor = SqlAlchemyWarehouseExecutor(cast(Engine, engine))
+
+    executor.discover_stores()
+    executor.read_store("084")
+
+    assert engine.connection.calls == [
+        (STORE_SCHEMA, {}),
+        (READ_TIME, {}),
+        (STORES, {}),
+        (MAPPING_SCHEMA, {}),
+        (CAMPAIGN_SCHEMA, {}),
+        (READ_TIME, {}),
+        (MAPPINGS, {"store_code": "084"}),
+        (CAMPAIGNS, {"store_code": "084"}),
+    ]
+    assert all(sql.startswith("SELECT ") for sql, _ in engine.connection.calls)
+
+
+def test_production_facing_api_accepts_no_caller_supplied_sql() -> None:
+    assert warehouse_module.__all__ == [
+        "WAREHOUSE_QUERY_VERSION",
+        "WarehouseReadError",
+        "WarehouseReader",
+    ]
+    assert not hasattr(warehouse_module, "SqlReadSession")
+    executor_methods = {
+        name
+        for name, method in inspect.getmembers(
+            SqlAlchemyWarehouseExecutor, inspect.isfunction
+        )
+        if not name.startswith("_")
+    }
+    assert executor_methods == {"discover_stores", "read_store"}
+    for method_name in executor_methods:
+        parameters = inspect.signature(
+            getattr(SqlAlchemyWarehouseExecutor, method_name)
+        ).parameters
+        assert not {"sql", "statement", "query"}.intersection(parameters)
 
 
 def test_reader_satisfies_the_application_port_and_exposes_no_write_api() -> None:
@@ -177,23 +249,41 @@ def test_reader_satisfies_the_application_port_and_exposes_no_write_api() -> Non
         name
         for name in public
         if name.casefold().startswith(
-            (
-                "insert",
-                "update",
-                "delete",
-                "write",
-                "set_",
-                "create",
-                "drop",
-                "truncate",
-            )
+            ("insert", "update", "delete", "write", "set_", "create", "drop", "truncate")
         )
     ]
 
 
-def test_sql_server_url_requests_read_only_application_intent_without_exposing_password() -> (
-    None
-):
+def test_null_store_routing_value_is_malformed_source_data() -> None:
+    executor = FakeExecutor(
+        directory_rows=({"ORG_CD": "084", "ORG_IP": None, "ORG_DB": "STORE_084"},)
+    )
+
+    with pytest.raises(WarehouseReadError) as raised:
+        reader(executor).discover_stores(SourceWindow(START, END))
+
+    assert raised.value.signal == FailureSignal(
+        DependencyKind.SOURCE_DATA, FailureKind.MALFORMED
+    )
+
+
+def test_store_routing_values_are_trimmed_before_return() -> None:
+    executor = FakeExecutor(
+        directory_rows=(
+            {"ORG_CD": " 084 ", "ORG_IP": " 10.0.0.84 ", "ORG_DB": " STORE_084 "},
+        )
+    )
+
+    store = reader(executor).discover_stores(SourceWindow(START, END)).stores[0]
+
+    assert (store.store_code, store.org_ip, store.org_db) == (
+        "084",
+        "10.0.0.84",
+        "STORE_084",
+    )
+
+
+def test_sql_server_url_requests_read_only_application_intent_without_exposing_password() -> None:
     url = URL.create(
         "mssql+pyodbc",
         username="reader",
@@ -209,6 +299,22 @@ def test_sql_server_url_requests_read_only_application_intent_without_exposing_p
     assert "top-secret" not in repr(read_only)
 
 
+def test_engine_requires_snapshot_isolation(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    def capture_create_engine(url: URL, **kwargs: object) -> Engine:
+        captured["url"] = url
+        captured.update(kwargs)
+        return cast(Engine, object())
+
+    monkeypatch.setattr(warehouse_module, "create_engine", capture_create_engine)
+    url = URL.create("mssql+pyodbc", host="warehouse.internal", database="DBWH_8555")
+
+    create_warehouse_engine(url)
+
+    assert captured["isolation_level"] == "SNAPSHOT"
+
+
 def test_factory_uses_issue_78_settings_and_the_fixed_source_secret_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -216,7 +322,7 @@ def test_factory_uses_issue_78_settings_and_the_fixed_source_secret_key(
 
     def capture_engine(url: URL) -> Engine:
         captured.append(url)
-        return object()  # type: ignore[return-value]
+        return cast(Engine, object())
 
     monkeypatch.setattr(warehouse_module, "create_warehouse_engine", capture_engine)
     settings = Settings.model_validate(

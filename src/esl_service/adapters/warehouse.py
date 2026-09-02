@@ -8,8 +8,8 @@ to be complete incremental watermarks, so each call takes a transactional
 current-state snapshot and records the caller's window plus database UTC time.
 """
 
-from collections.abc import Iterator, Mapping, Sequence
-from contextlib import AbstractContextManager, contextmanager
+from collections.abc import Iterator, Mapping
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Protocol
 
@@ -33,6 +33,12 @@ from esl_service.runtime.connectivity import (
 )
 from esl_service.runtime.secrets import SecretProvider
 
+__all__ = [
+    "WAREHOUSE_QUERY_VERSION",
+    "WarehouseReadError",
+    "WarehouseReader",
+]
+
 WAREHOUSE_QUERY_VERSION = "warehouse-current-state-v1"
 
 _DIM_STORE = "dbo.DimStore"
@@ -50,46 +56,66 @@ _CAMPAIGNS = "SELECT * FROM dbo.FactCampaign WHERE FOR_ORGANIZATION = :store_cod
 _SCHEMA_SQLSTATE_PREFIXES = ("42",)
 
 
-class SqlReadSession(Protocol):
-    """The SELECT-only capability exposed to the warehouse reader."""
+@dataclass(frozen=True)
+class WarehouseDirectoryRows:
+    """Closed transport result for one directory read."""
 
-    def fetch_all(
-        self, statement: str, parameters: Mapping[str, object] | None = None
-    ) -> Sequence[Mapping[str, object]]: ...
+    rows: tuple[Mapping[str, object], ...]
+    source_watermark: datetime
 
-    def fetch_scalar(self, statement: str) -> object: ...
+
+@dataclass(frozen=True)
+class WarehouseStoreRows:
+    """Closed transport result for one store data read."""
+
+    item_mappings: tuple[Mapping[str, object], ...]
+    campaigns: tuple[Mapping[str, object], ...]
+    source_watermark: datetime
 
 
 class WarehouseReadExecutor(Protocol):
-    """Opens one bounded read transaction without exposing mutation methods."""
+    """Closed read operations; callers cannot supply SQL through this API."""
 
-    def read_transaction(self) -> AbstractContextManager[SqlReadSession]: ...
+    def discover_stores(self) -> WarehouseDirectoryRows: ...
 
-
-class _SqlAlchemyReadSession:
-    def __init__(self, connection: Connection) -> None:
-        self._connection = connection
-
-    def fetch_all(
-        self, statement: str, parameters: Mapping[str, object] | None = None
-    ) -> Sequence[Mapping[str, object]]:
-        result = self._connection.execute(text(statement), parameters or {})
-        return tuple(dict(row) for row in result.mappings())
-
-    def fetch_scalar(self, statement: str) -> object:
-        return self._connection.execute(text(statement)).scalar_one()
+    def read_store(self, store_code: str) -> WarehouseStoreRows: ...
 
 
 class SqlAlchemyWarehouseExecutor:
-    """SQLAlchemy transport whose public capability is one read transaction."""
+    """SQLAlchemy transport exposing only two closed, SELECT-only operations."""
 
     def __init__(self, engine: Engine) -> None:
         self._engine = engine
 
-    @contextmanager
-    def read_transaction(self) -> Iterator[SqlReadSession]:
+    def discover_stores(self) -> WarehouseDirectoryRows:
         with self._engine.connect() as connection, connection.begin():
-            yield _SqlAlchemyReadSession(connection)
+            _fetch_all(connection, _STORE_SCHEMA)
+            source_watermark = _watermark(
+                connection.execute(text(_READ_TIME)).scalar_one()
+            )
+            rows = _fetch_all(connection, _STORES)
+        return WarehouseDirectoryRows(rows, source_watermark)
+
+    def read_store(self, store_code: str) -> WarehouseStoreRows:
+        with self._engine.connect() as connection, connection.begin():
+            _fetch_all(connection, _MAPPING_SCHEMA)
+            _fetch_all(connection, _CAMPAIGN_SCHEMA)
+            source_watermark = _watermark(
+                connection.execute(text(_READ_TIME)).scalar_one()
+            )
+            parameters: Mapping[str, object] = {"store_code": store_code}
+            mappings = _fetch_all(connection, _MAPPINGS, parameters)
+            campaigns = _fetch_all(connection, _CAMPAIGNS, parameters)
+        return WarehouseStoreRows(mappings, campaigns, source_watermark)
+
+
+def _fetch_all(
+    connection: Connection,
+    statement: str,
+    parameters: Mapping[str, object] | None = None,
+) -> tuple[Mapping[str, object], ...]:
+    result = connection.execute(text(statement), parameters or {})
+    return tuple(dict(row) for row in result.mappings())
 
 
 class WarehouseReadError(RuntimeError):
@@ -115,6 +141,7 @@ def create_warehouse_engine(url: URL) -> Engine:
     return create_engine(
         build_read_only_url(url),
         connect_args={"timeout": 10},
+        isolation_level="SNAPSHOT",
         pool_pre_ping=True,
     )
 
@@ -160,6 +187,16 @@ def _watermark(value: object) -> datetime:
     return value.astimezone(UTC)
 
 
+def _source_text(row: Mapping[str, object], column: str) -> str:
+    value = row[column]
+    if not isinstance(value, str):
+        raise TypeError(f"warehouse {column} must be text")
+    normalized = value.strip()
+    if not normalized:
+        raise ValueError(f"warehouse {column} must not be blank")
+    return normalized
+
+
 class WarehouseReader:
     """Implements the shared-tier ``WarehouseSourceReader`` application port."""
 
@@ -200,18 +237,15 @@ class WarehouseReader:
 
     def discover_stores(self, source_window: SourceWindow) -> StoreDiscoveryResult:
         try:
-            with self._executor.read_transaction() as session:
-                session.fetch_all(_STORE_SCHEMA)
-                source_watermark = _watermark(session.fetch_scalar(_READ_TIME))
-                rows = session.fetch_all(_STORES)
-                stores = tuple(
-                    StoreDirectoryEntry(
-                        store_code=str(row["ORG_CD"]),
-                        org_ip=str(row["ORG_IP"]),
-                        org_db=str(row["ORG_DB"]),
-                    )
-                    for row in rows
+            read = self._executor.discover_stores()
+            stores = tuple(
+                StoreDirectoryEntry(
+                    store_code=_source_text(row, "ORG_CD"),
+                    org_ip=_source_text(row, "ORG_IP"),
+                    org_db=_source_text(row, "ORG_DB"),
                 )
+                for row in read.rows
+            )
         except WarehouseReadError:
             raise
         except Exception as error:  # noqa: BLE001 - driver errors need safe classification
@@ -222,35 +256,25 @@ class WarehouseReader:
             provenance=self._provenance(
                 objects=(_DIM_STORE,),
                 source_window=source_window,
-                source_watermark=source_watermark,
+                source_watermark=read.source_watermark,
             ),
         )
 
     def read_store(self, request: WarehouseReadRequest) -> WarehouseReadResult:
         try:
-            with self._executor.read_transaction() as session:
-                session.fetch_all(_MAPPING_SCHEMA)
-                session.fetch_all(_CAMPAIGN_SCHEMA)
-                source_watermark = _watermark(session.fetch_scalar(_READ_TIME))
-                parameters: Mapping[str, object] = {"store_code": request.store_code}
-                mappings = tuple(
-                    dict(row) for row in session.fetch_all(_MAPPINGS, parameters)
-                )
-                campaigns = tuple(
-                    dict(row) for row in session.fetch_all(_CAMPAIGNS, parameters)
-                )
+            read = self._executor.read_store(request.store_code)
         except WarehouseReadError:
             raise
         except Exception as error:  # noqa: BLE001 - driver errors need safe classification
             raise WarehouseReadError(_failure_signal(error)) from None
 
         return WarehouseReadResult(
-            item_mappings=mappings,
-            campaigns=campaigns,
+            item_mappings=read.item_mappings,
+            campaigns=read.campaigns,
             provenance=self._provenance(
                 objects=(_DIM_ITEM_MAPPING, _FACT_CAMPAIGN),
                 source_window=request.source_window,
-                source_watermark=source_watermark,
+                source_watermark=read.source_watermark,
             ),
         )
 

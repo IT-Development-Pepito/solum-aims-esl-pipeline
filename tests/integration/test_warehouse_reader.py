@@ -94,3 +94,19 @@ def test_configured_identity_has_no_write_permission(warehouse_engine: Engine) -
                 {"object_name": object_name},
             ).one()
             assert tuple(permissions) == (0, 0, 0)
+
+
+def test_configured_source_supports_transaction_level_snapshot_isolation(
+    warehouse_engine: Engine,
+) -> None:
+    """No weaker read-committed fallback may be labelled a coherent snapshot."""
+
+    with warehouse_engine.connect() as connection, connection.begin():
+        isolation_level = connection.execute(
+            text(
+                "SELECT transaction_isolation_level "
+                "FROM sys.dm_exec_sessions WHERE session_id = @@SPID"
+            )
+        ).scalar_one()
+
+    assert isolation_level == 5, "SQL Server reports SNAPSHOT as isolation level 5"
