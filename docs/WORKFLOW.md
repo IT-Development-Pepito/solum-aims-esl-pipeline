@@ -114,6 +114,10 @@ Emergency fixes follow the same contract: reconcile the documents in the same PR
 
 ## Standard procedures
 
+### Who may perform a manual operation
+
+Every manual operation in this section is authorized under the two-role model of AD-018 (FR-023). An **operator** may trigger a run, query status, retry, replay, and request reconciliation. An **admin** may do all of that and, in addition, enable or disable a schedule and apply the fallback below. Roles are assigned per Windows account in `ESL_OPERATOR_ROLES` (`identity=role[,role]`, entries separated by `;`, names compared without regard to case) until the authenticated web session of #28 replaces it. An account with no assignment is refused, and every refusal is written to `audit_entry` under that account's name with the operation and the role it lacked, so an unexpected refusal is diagnosed from the ledger rather than from a log. Every mutation also requires a reason, normally the change or incident ticket; a blank reason is refused before any role check. A malformed `ESL_OPERATOR_ROLES` stops the service at startup rather than silently authorizing nobody.
+
 ### Check service and dependency status
 
 1. Use **`<target-service status>`** to confirm process health and current version.
@@ -283,3 +287,5 @@ Include execution ID, workflow/store/window, timestamps/timezone, failed depende
 ## Rollback / fallback
 
 Rollback only under the criteria in `SPECIFICATION.md`: disable target schedules, preserve target audit/state, restore the approved legacy trigger for the affected scope, reconcile the cutover window, and open an incident/change record. SQL Agent, Jenkins, and Hop must not be modified or removed as part of an emergency rollback unless explicitly authorized by the approved rollback plan. Production releases must first have a staging deploy and rollback rehearsal under NFR-012.
+
+The service automates only the first two of those steps (#26, AD-018). An admin applies `fallback` for a workflow, optionally bounded to one store, with the incident ticket as the reason. It disables every enabled schedule in that scope, each as its own audited change, touches no execution, checkpoint, or audit row, and appends one `fallback.applied` audit entry whose `reconcile_window_from` instant marks where the cutover-window reconciliation must start. Restoring the legacy SQL Agent trigger, reconciling that window, and opening the incident record remain manual steps of the approved rollback plan.

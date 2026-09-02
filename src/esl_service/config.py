@@ -12,6 +12,11 @@ from urllib.parse import urlsplit
 from pydantic import Field, ValidationError, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from esl_service.domain.authorization import (
+    InvalidRoleAssignment,
+    Role,
+    parse_role_assignments,
+)
 from esl_service.domain.failures import RetryPolicy
 from esl_service.domain.serialization import JSONValue, canonical_hash
 
@@ -420,6 +425,9 @@ class Settings(BaseSettings):
     compatibility_days: int | None = None
     service_identity_sid: str = Field(default="", repr=False)
     windows_service_name: str = ""
+    # identity=role[,role];identity=role -- who may perform manual operations
+    # (FR-023, AD-018). Not a secret: it is part of the configuration snapshot.
+    operator_roles: str = ""
     # Source and AIMS connections carry only non-secret parts (#78, AD-017).
     # Every password is read from the DPAPI bundle by a fixed key; there is
     # deliberately no field that could hold one. Empty means unconfigured.
@@ -597,6 +605,13 @@ def validate_startup_configuration(
                 ),
             ),
         )
+    # A mapping nobody can read would leave nobody authorized, which is safe
+    # but silent; refuse readiness so the operator fixes it before the first
+    # manual operation is refused for the wrong reason (FR-023).
+    try:
+        build_role_assignments(settings)
+    except InvalidRoleAssignment as error:
+        return None, (ConfigurationProblem(key="operator_roles", message=str(error)),)
     return settings, ()
 
 
@@ -631,6 +646,16 @@ class _ConfigurationSnapshot:
     """Typed carrier so the canonical serializer keeps refusing raw mappings."""
 
     entries: tuple[tuple[str, JSONValue], ...]
+
+
+def build_role_assignments(settings: Settings) -> dict[str, frozenset[Role]]:
+    """Return who holds which role under this configuration (FR-023, AD-018).
+
+    Lives with configuration for the same reason as ``build_retry_policy``:
+    the domain parses the text but never reads ``Settings``.
+    """
+
+    return parse_role_assignments(settings.operator_roles)
 
 
 def build_retry_policy(settings: Settings) -> RetryPolicy:
