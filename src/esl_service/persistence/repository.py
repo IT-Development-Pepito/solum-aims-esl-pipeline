@@ -374,6 +374,70 @@ class ExecutionRepository:
 
         return ActionRepository(self._session).create_intended(request)
 
+    # --- the runner's view (#102) --------------------------------------------
+
+    def get_execution(self, execution_id: UUID) -> WorkflowExecution:
+        """Return one execution row, or raise ``LookupError`` when it does not exist."""
+
+        execution = self._session.get(WorkflowExecution, execution_id)
+        if execution is None:
+            raise LookupError(f"no execution with id {execution_id}")
+        return execution
+
+    def step_history(self, execution_id: UUID) -> list[ExecutionStep]:
+        """Return the latest attempt of every step, with checkpoints, in start order.
+
+        The runner resumes from this: a step whose latest attempt succeeded is
+        not repeated when its result is durable, and the next attempt number
+        of a failed step follows from it.
+        """
+
+        statement = (
+            select(ExecutionStep)
+            .where(ExecutionStep.execution_id == execution_id)
+            .order_by(ExecutionStep.started_at, ExecutionStep.attempt)
+            .options(selectinload(ExecutionStep.checkpoints))
+        )
+        latest: dict[str, ExecutionStep] = {}
+        for step in self._session.scalars(statement):
+            current = latest.get(step.step_name)
+            if current is None or step.attempt > current.attempt:
+                latest[step.step_name] = step
+        return sorted(latest.values(), key=lambda step: (step.started_at, step.attempt))
+
+    def configuration_hash_of(self, configuration_version_id: UUID) -> str:
+        """Return the content hash of one configuration version (#104 actions record it)."""
+
+        from esl_service.persistence.models import ConfigurationVersion
+
+        version = self._session.get(ConfigurationVersion, configuration_version_id)
+        if version is None:
+            raise LookupError(f"no configuration version with id {configuration_version_id}")
+        return version.content_hash
+
+    def runnable_executions(self, *, limit: int) -> list[UUID]:
+        """Return executions the worker may run now, oldest first.
+
+        QUEUED, RETRY_WAIT, and RECOVERING are runnable; RUNNING is not,
+        because a live process owns it until ``recover_all`` says otherwise.
+        """
+
+        statement = (
+            select(WorkflowExecution.id)
+            .where(
+                WorkflowExecution.status.in_(
+                    [
+                        ExecutionStatus.QUEUED.value,
+                        ExecutionStatus.RETRY_WAIT.value,
+                        ExecutionStatus.RECOVERING.value,
+                    ]
+                )
+            )
+            .order_by(WorkflowExecution.started_at, WorkflowExecution.id)
+            .limit(limit)
+        )
+        return list(self._session.scalars(statement))
+
     def list_events(self, execution_id: UUID) -> list[ExecutionEvent]:
         """Return events in their database occurrence order for an execution."""
 

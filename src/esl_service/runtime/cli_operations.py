@@ -14,7 +14,7 @@ defaults build everything from ``Settings`` and the DPAPI bundle; when that
 is impossible the command says why by category, never with a traceback.
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import datetime
 from typing import Annotated
 from uuid import UUID, uuid4
@@ -102,6 +102,16 @@ def _default_context() -> LaunchContext:
 
 
 _context: Callable[[], LaunchContext] = _default_context
+
+
+def _default_steps(execution_id: UUID) -> Sequence[object]:
+    from esl_service.runtime.host import execution_steps
+
+    return execution_steps(execution_id)
+
+
+#: The steps and checkpoints of one run (#102), for ``runs show``.
+_steps: Callable[[UUID], Sequence[object]] = _default_steps
 
 
 def _service() -> tuple[AuthorizedOperations, Principal]:
@@ -237,6 +247,33 @@ def runs_show(execution_id: UUID) -> None:
         typer.echo(f"Not found: no execution with id {execution_id}")
         raise typer.Exit(code=1)
     _print_execution(found[0])
+    _print_steps(execution_id)
+
+
+def _print_steps(execution_id: UUID) -> None:
+    """Show where the run is: each step's latest attempt and its last checkpoint (#102)."""
+
+    try:
+        steps = _steps(execution_id)
+    except OperationsUnavailable as error:
+        typer.echo(f"steps: unavailable ({error})")
+        return
+    if not steps:
+        typer.echo("steps: none yet")
+        return
+    for step in steps:
+        failure = getattr(step, "failure_class", None)
+        detail = f", {failure}" if failure else ""
+        typer.echo(
+            f"step {getattr(step, 'step_name', '?')}: {getattr(step, 'outcome', '?')} "
+            f"(attempt {getattr(step, 'attempt', '?')}{detail})"
+        )
+        checkpoints = list(getattr(step, "checkpoints", ()) or ())
+        if checkpoints:
+            last = checkpoints[-1]
+            typer.echo(
+                f"  checkpoint {getattr(last, 'checkpoint_key', '?')} @ {getattr(last, 'watermark', '?')}"
+            )
 
 
 @runs_app.command("list")

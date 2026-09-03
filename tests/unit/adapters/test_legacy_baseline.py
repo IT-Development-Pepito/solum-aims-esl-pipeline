@@ -246,13 +246,20 @@ def test_factory_refuses_an_unconfigured_tier() -> None:
 
 
 def test_no_ingestion_or_domain_module_imports_the_baseline_reader() -> None:
-    """The baseline is unreachable from any non-shadow code path: only a
-    shadow-comparison module may import it, and none exists yet."""
+    """The baseline is unreachable from any ingestion or domain code path.
+
+    The one permitted importer is the runtime composition root (#102,
+    ``runtime/host.py``), which hands the baseline to the shadow comparison
+    and returns nothing outside shadow mode; ``domain``, ``application``,
+    ``adapters``, ``persistence``, and ``web`` may never import it.
+    """
 
     source_root = Path(baseline_module.__file__).resolve().parents[1]
     offenders: list[str] = []
     for path in sorted(source_root.rglob("*.py")):
         if path.name == "legacy_baseline.py":
+            continue
+        if path.relative_to(source_root).parts[0] == "runtime":
             continue
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):

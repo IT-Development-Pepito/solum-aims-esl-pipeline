@@ -129,7 +129,7 @@ Expected implementation outcome: liveness indicates the process is running; read
 ### Check workflow status and find failures
 
 1. Query **`esl-admin runs list --workflow <name> --store <code> --from <iso-instant> --to <iso-instant>`** (instants carry an offset, e.g. `2026-09-02T07:00:00+07:00`; at least one selector is required), or **`GET /runs?workflow_name=&store_code=&started_from=&started_to=`** with a bearer token.
-2. Select the execution ID and inspect **`esl-admin runs show <execution-id>`** or **`GET /runs/{execution-id}`**.
+2. Select the execution ID and inspect **`esl-admin runs show <execution-id>`** or **`GET /runs/{execution-id}`**. The CLI also lists each step's latest attempt, outcome, failure class, and last checkpoint (#102), so "where is this run" is answered without reading `execution_step` directly; a `FAILED` run's `terminal_reason` reads `step:dependency:kind:class`, for example `read-store:sql_server:unavailable:RETRYABLE:attempts_exhausted`.
 3. Review terminal state, failed step, retry count, timeout/error class, configuration/rule version, checkpoint, source window, and affected-record counts.
 4. Query the target database's structured execution/event logs and open correlated metrics using the execution ID. Do not treat a missing log line as evidence an external action did not occur.
 
@@ -143,7 +143,7 @@ Expected implementation outcome: liveness indicates the process is running; read
 ### Manually trigger a workflow
 
 1. Verify readiness and that the schedule is not already owning the same scope.
-2. Submit **`esl-admin runs start --workflow <name> --store <code> --window-start <iso-instant> --window-end <iso-instant> --reason <ticket>`** as an account holding the `operator` or `admin` role, or **`POST /runs`** with the same fields as JSON and a bearer token. The run is created in the mode configuration dictates (`ESL_SHADOW_MODE`), under the active configuration version and rule version; nothing executes it yet, because no workflow runner exists until the source adapters land (#91 to #94).
+2. Submit **`esl-admin runs start --workflow <name> --store <code> --window-start <iso-instant> --window-end <iso-instant> --reason <ticket>`** as an account holding the `operator` or `admin` role, or **`POST /runs`** with the same fields as JSON and a bearer token. The run is created in the mode configuration dictates (`ESL_SHADOW_MODE`), under the active configuration version and rule version. The service's worker (#102) picks it up within `ESL_WORKER_CONCURRENCY` slots and runs it step by step (`discover`, `read-warehouse`, `read-store`, `read-pepito-ho`, `canonicalize`, `persist`); a retryable source failure leaves it in `RETRY_WAIT` and the worker retries it under the configured policy, a non-retryable one ends it in `FAILED` with a terminal reason naming the step, dependency, kind, and class. In shadow mode the run reads the sources, computes, and persists its evidence and reconciliation report; nothing is sent to AIMS. `ACTIVE` mode fails terminally until the AIMS mutation adapter (#23) exists.
 3. Record the execution ID in the change/incident ticket.
 4. Monitor until terminal state and perform reconciliation.
 

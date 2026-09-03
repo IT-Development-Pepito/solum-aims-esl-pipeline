@@ -23,9 +23,23 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session, sessionmaker
 
+from esl_service.application.canonicalize import CanonicalizationResult
+from esl_service.application.contracts import (
+    BaselineReadResult,
+    SourceWindow,
+    StoreDirectoryEntry,
+    StoreReadResult,
+    UomMappingReadRequest,
+    UomMappingReadResult,
+    WarehouseReadRequest,
+    WarehouseReadResult,
+)
 from esl_service.application.operations import AuthorizedOperations
+from esl_service.application.persist_run import PersistedRun, RunContext, persist_run
+from esl_service.application.runner import RunOutcome, WorkflowRunner
 from esl_service.config import (
     Settings,
+    build_retry_policy,
     build_role_assignments,
     validate_startup_configuration,
 )
@@ -35,11 +49,17 @@ from esl_service.domain.outcomes import ExecutionMode
 from esl_service.domain.promotion_selection import SELECTION_STRATEGY_VERSION
 from esl_service.domain.reconciliation import ReconciliationCounts, ReconciliationMode
 from esl_service.domain.scheduling import ManualLaunch
+from esl_service.persistence.action_repository import ActionRepository
 from esl_service.persistence.configuration_repository import ConfigurationRepository
 from esl_service.persistence.db import create_database_engine_from_settings
+from esl_service.persistence.evidence_repository import (
+    PromotionEvidenceRepository,
+    RecordOutcomeRepository,
+)
 from esl_service.persistence.launch_repository import LaunchRepository
 from esl_service.persistence.reconciliation_repository import ReconciliationRepository
 from esl_service.persistence.repository import ExecutionRepository
+from esl_service.persistence.snapshot_repository import SnapshotRepository
 from esl_service.runtime.cli_operations import OperationsUnavailable
 from esl_service.runtime.connectivity import SqlAlchemyConnector, build_probes
 from esl_service.runtime.health import HealthService
@@ -52,10 +72,13 @@ from esl_service.runtime.secrets import (
     SecretUnavailableError,
 )
 from esl_service.runtime.service_host import ServiceHost
+from esl_service.runtime.worker import WorkerLoop
 from esl_service.web.auth import BearerTokenAuthenticator, tokens_from_bundle
 
 #: Seconds between scheduler ticks; cron granularity is one minute.
 TICK_INTERVAL_SECONDS = 60.0
+#: Seconds between worker picks; a launched run waits at most this long.
+WORKER_INTERVAL_SECONDS = 5.0
 
 
 # --- settings and secrets ---------------------------------------------------------
@@ -212,6 +235,7 @@ class Host:
     service: ServiceHost
     context: LaunchContext
     authenticator: BearerTokenAuthenticator
+    worker: WorkerLoop | None = None
 
 
 def launch_context(settings: Settings | None = None) -> LaunchContext:
@@ -254,7 +278,8 @@ def build_host(settings: Settings | None = None) -> Host:
     context = launch_context(settings)
     scheduler = Scheduler(ports, context)
     ticker = ThreadedTicker(scheduler)
-    service = ServiceHost(scheduler=scheduler, ticker=ticker, audit=ports)
+    worker = build_worker(settings)
+    service = ServiceHost(scheduler=scheduler, ticker=ticker, audit=ports, worker=worker)
     operations = AuthorizedOperations(
         launches=ports, schedules=ports, status=ports, reconciliation=ports, audit=ports
     )
@@ -273,6 +298,7 @@ def build_host(settings: Settings | None = None) -> Host:
         service=service,
         context=context,
         authenticator=authenticator,
+        worker=worker,
     )
 
 
@@ -298,3 +324,183 @@ def run_foreground(settings: Settings | None = None) -> None:
         uvicorn.run(app, host=host.settings.internal_host, port=host.settings.internal_port, log_level="info")
     finally:
         host.service.stop(reason="foreground exit")
+
+
+# --- the runner (#102) ----------------------------------------------------------------------
+
+
+class RunnerPorts(TransactionalPorts):
+    """The runner's execution port: every call in its own committed transaction.
+
+    A run spans minutes, so it must not hold one transaction; each transition,
+    step, checkpoint, and heartbeat commits on its own, which is also what
+    makes the evidence visible to ``runs show`` while the run is in flight.
+    """
+
+    def get_execution(self, execution_id: UUID) -> Any:
+        with self._scope() as session:
+            return ExecutionRepository(session).get_execution(execution_id)
+
+    def transition_execution(
+        self, execution_id: UUID, expected_status: Any, requested_status: Any, *, terminal_reason: str | None = None
+    ) -> Any:
+        with self._scope() as session:
+            return ExecutionRepository(session).transition_execution(
+                execution_id, expected_status, requested_status, terminal_reason=terminal_reason
+            )
+
+    def start_step(self, execution_id: UUID, step_name: str, *, attempt: int = 1) -> Any:
+        with self._scope() as session:
+            return ExecutionRepository(session).start_step(execution_id, step_name, attempt=attempt)
+
+    def finish_step(self, step_id: UUID, *, outcome: str, failure_class: Any = None) -> Any:
+        with self._scope() as session:
+            return ExecutionRepository(session).finish_step(step_id, outcome=outcome, failure_class=failure_class)
+
+    def append_checkpoint(self, step_id: UUID, **fields: Any) -> Any:
+        with self._scope() as session:
+            return ExecutionRepository(session).append_checkpoint(step_id, **fields)
+
+    def append_event(self, execution_id: UUID, event_type: str, payload: Any) -> Any:
+        with self._scope() as session:
+            return ExecutionRepository(session).append_event(execution_id, event_type, payload)
+
+    def step_history(self, execution_id: UUID) -> Sequence[Any]:
+        with self._scope() as session:
+            return ExecutionRepository(session).step_history(execution_id)
+
+    def configuration_hash_of(self, configuration_version_id: UUID) -> str:
+        with self._scope() as session:
+            return ExecutionRepository(session).configuration_hash_of(configuration_version_id)
+
+    def heartbeat_scope(self, scope_key: str, execution_id: UUID) -> bool:
+        with self._scope() as session:
+            return ExecutionRepository(session).heartbeat_scope(scope_key, execution_id)
+
+    def release_scope(self, scope_key: str, execution_id: UUID) -> bool:
+        with self._scope() as session:
+            return ExecutionRepository(session).release_scope(scope_key, execution_id)
+
+    def recoverable_executions(self) -> Sequence[Any]:
+        with self._scope() as session:
+            return ExecutionRepository(session).recoverable_executions()
+
+    def runnable_executions(self, limit: int) -> Sequence[UUID]:
+        with self._scope() as session:
+            return ExecutionRepository(session).runnable_executions(limit=limit)
+
+    def persist(
+        self,
+        result: CanonicalizationResult,
+        context: RunContext,
+        *,
+        legacy_baseline: BaselineReadResult | None = None,
+        step_id: UUID | None = None,
+    ) -> PersistedRun:
+        """The #104 step in one transaction, as its checkpoint semantics require."""
+
+        with self._scope() as session:
+            return persist_run(
+                result,
+                context,
+                executions=ExecutionRepository(session),
+                snapshots=SnapshotRepository(session),
+                outcomes=RecordOutcomeRepository(session),
+                promotions=PromotionEvidenceRepository(session),
+                actions=ActionRepository(session),
+                reconciliation=ReconciliationRepository(session),
+                legacy_baseline=legacy_baseline,
+                step_id=step_id,
+            )
+
+
+class LiveSources:
+    """The four tiers behind their adapters (#91 to #94), built per call.
+
+    Each adapter raises its own error carrying a #20 ``FailureSignal``; the
+    runner classifies it. Readers are built per call so a rotated credential
+    or a changed DimStore row is picked up by the next run, not the next
+    restart.
+    """
+
+    def __init__(self, settings: Settings) -> None:
+        self._settings = settings
+        self._secrets = _secrets(settings)
+
+    def discover_store(self, store_code: str, window: SourceWindow) -> StoreDirectoryEntry | None:
+        from esl_service.adapters.warehouse import WarehouseReader
+
+        directory = WarehouseReader.from_settings(self._settings, self._secrets).discover_stores(window)
+        for entry in directory.stores:
+            if entry.store_code == store_code:
+                return entry
+        return None
+
+    def read_warehouse(self, store_code: str, window: SourceWindow) -> WarehouseReadResult:
+        from esl_service.adapters.warehouse import WarehouseReader
+
+        return WarehouseReader.from_settings(self._settings, self._secrets).read_store(
+            WarehouseReadRequest(store_code, window)
+        )
+
+    def read_uom_mappings(self, item_codes: Sequence[str], window: SourceWindow) -> UomMappingReadResult:
+        from esl_service.adapters.pepito_ho import PepitoHoReader
+
+        return PepitoHoReader.from_settings(self._settings, self._secrets).read_mappings(
+            UomMappingReadRequest(tuple(item_codes), window)
+        )
+
+    def read_store(self, entry: StoreDirectoryEntry, window: SourceWindow) -> StoreReadResult:
+        from esl_service.adapters.store import StoreReader
+        from esl_service.application.contracts import StoreReadRequest
+
+        return StoreReader.from_directory_entry(self._settings, self._secrets, entry).read_store(
+            StoreReadRequest(entry, window)
+        )
+
+    def read_baseline(self, store_code: str, window: SourceWindow) -> BaselineReadResult | None:
+        from esl_service.adapters.legacy_baseline import TbEslBaselineReader
+        from esl_service.application.contracts import BaselineReadRequest
+
+        if not self._settings.shadow_mode:
+            return None
+        return TbEslBaselineReader.from_settings(self._settings, self._secrets).read_baseline(
+            BaselineReadRequest(store_code, window)
+        )
+
+
+def build_runner(settings: Settings | None = None) -> tuple[WorkflowRunner, RunnerPorts]:
+    settings = settings or load_settings()
+    ports = RunnerPorts(_session_factory(settings))
+    runner = WorkflowRunner(
+        executions=ports,
+        sources=LiveSources(settings),
+        retry_policy=build_retry_policy(settings),
+        persist=ports.persist,
+    )
+    return runner, ports
+
+
+def build_worker(settings: Settings | None = None) -> WorkerLoop:
+    """The run loop: recovery first, then runnable executions under the bound."""
+
+    settings = settings or load_settings()
+    runner, ports = build_runner(settings)
+
+    def run(execution_id: UUID) -> RunOutcome:
+        return runner.run(execution_id)
+
+    return WorkerLoop(
+        ports.runnable_executions,
+        run,
+        concurrency=settings.worker_concurrency,
+        interval_seconds=WORKER_INTERVAL_SECONDS,
+        on_start=runner.recover_all,
+    )
+
+
+def execution_steps(execution_id: UUID, settings: Settings | None = None) -> Sequence[Any]:
+    """The steps and checkpoints of one run, for ``runs show``."""
+
+    settings = settings or load_settings()
+    return RunnerPorts(_session_factory(settings)).step_history(execution_id)
