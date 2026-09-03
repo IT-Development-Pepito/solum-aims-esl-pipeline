@@ -11,6 +11,7 @@ page, that a write is refused, and that every read leaves audit evidence.
 """
 
 import os
+import socket
 from collections.abc import Iterator
 
 import pytest
@@ -24,10 +25,12 @@ from esl_service.adapters.aims_compatibility import (
     AIMS_READ_RESOURCE,
     AimsCompatibilityReader,
     AimsSchemaDrift,
+    AimsUnavailable,
     AuditedReadSink,
     create_read_only_engine,
 )
 from esl_service.application.contracts import AimsReadModelReader
+from esl_service.domain.failures import FailureKind
 from esl_service.persistence.models import AuditEntry
 from esl_service.persistence.reconciliation_repository import ReconciliationRepository
 
@@ -154,6 +157,46 @@ def test_pointing_at_a_database_without_the_tables_is_schema_drift(
 
     assert "enddevice" in str(error.value)
     assert "://" not in str(error.value)
+
+
+def test_a_clone_that_is_not_listening_is_unavailable_not_drift(core_engine: Engine) -> None:
+    """The same driver and URL shape, but nothing on the port: retryable, not drift (#110)."""
+
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    silent_url = (
+        make_url(_clone_url("ESL_TEST_AIMS_PORTAL_URL"))
+        .set(port=port)
+        .update_query_dict({"connect_timeout": "2"})
+    )
+    silent_portal = create_read_only_engine(silent_url)
+    try:
+        with pytest.raises(AimsUnavailable) as error:
+            AimsCompatibilityReader(silent_portal, core_engine).fetch_labels("084")
+    finally:
+        silent_portal.dispose()
+
+    assert error.value.signal.kind is FailureKind.UNAVAILABLE
+    assert "end_device" in str(error.value)
+    assert "://" not in str(error.value)
+    if silent_url.password:
+        assert silent_url.password not in str(error.value)
+
+
+def test_a_rejected_login_on_the_clone_is_unavailable_not_drift(core_engine: Engine) -> None:
+    """The server answers and refuses the password; still an availability fault, not drift."""
+
+    wrong_url = make_url(_clone_url("ESL_TEST_AIMS_PORTAL_URL")).set(password="not-the-password")
+    wrong_portal = create_read_only_engine(wrong_url)
+    try:
+        with pytest.raises(AimsUnavailable) as error:
+            AimsCompatibilityReader(wrong_portal, core_engine).fetch_labels("084")
+    finally:
+        wrong_portal.dispose()
+
+    assert error.value.signal.kind is FailureKind.UNAVAILABLE
+    assert "not-the-password" not in str(error.value)
 
 
 # --- every read is audit-visible (acceptance criterion 2) --------------------

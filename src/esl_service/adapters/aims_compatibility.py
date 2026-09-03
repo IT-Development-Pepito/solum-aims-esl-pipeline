@@ -75,6 +75,49 @@ class AimsSchemaDrift(RuntimeError):
         )
 
 
+class AimsUnavailable(RuntimeError):
+    """The compatibility database did not answer, or answered with a fault.
+
+    Carries the section 8 UNAVAILABLE signal, which is retryable, so an outage
+    or a refused connection is never mistaken for a permanent schema change.
+    """
+
+    def __init__(self, relation: str) -> None:
+        super().__init__(
+            f"AIMS compatibility database unavailable while reading relation {relation!r}"
+        )
+        self.relation = relation
+        self.signal = FailureSignal(
+            dependency=DependencyKind.AIMS_COMPATIBILITY, kind=FailureKind.UNAVAILABLE
+        )
+
+
+#: PostgreSQL SQLSTATEs that mean a relation or column this reader relies on is
+#: gone: undefined_table, undefined_column, invalid_schema_name. Every other
+#: driver error, including one raised before a connection exists, is an
+#: availability fault.
+_SCHEMA_DRIFT_SQLSTATES = frozenset({"42P01", "42703", "3F000"})
+
+
+def failure_for(error: BaseException, relation: str) -> AimsSchemaDrift | AimsUnavailable:
+    """Map a driver error onto its section 8 row by SQLSTATE, never by its text.
+
+    SQLAlchemy wraps the driver error as ``orig`` and psycopg carries the
+    SQLSTATE as ``sqlstate``; the chain is walked so the answer does not
+    depend on which layer raised. The driver message can embed the connection
+    string, so it is dropped: the result carries only the relation name.
+    """
+
+    seen: list[BaseException] = []
+    current: BaseException | None = error
+    while current is not None and current not in seen:
+        seen.append(current)
+        if getattr(current, "sqlstate", None) in _SCHEMA_DRIFT_SQLSTATES:
+            return AimsSchemaDrift(relation)
+        current = getattr(current, "orig", None) or current.__cause__
+    return AimsUnavailable(relation)
+
+
 # --- the page field -----------------------------------------------------------
 
 
@@ -318,23 +361,29 @@ class AimsCompatibilityReader:
             try:
                 with engine.connect() as connection:
                     connection.execute(text(probe))
-            except DBAPIError:
+            except DBAPIError as error:
                 # The driver message can embed the connection string.
-                raise AimsSchemaDrift(relation) from None
+                raise failure_for(error, relation) from None
 
     def _portal_labels(self, store_code: str) -> list[PortalLabel]:
-        with self._portal.connect() as connection:
-            rows = connection.execute(_PORTAL_LABELS, {"store": store_code}).all()
+        try:
+            with self._portal.connect() as connection:
+                rows = connection.execute(_PORTAL_LABELS, {"store": store_code}).all()
+        except DBAPIError as error:
+            raise failure_for(error, "end_device") from None
         return [PortalLabel(str(row[0]), str(row[1])) for row in rows]
 
     def _core_devices(self, codes: Sequence[str]) -> list[CoreDevice]:
         devices: list[CoreDevice] = []
-        with self._core.connect() as connection:
-            for start in range(0, len(codes), self._chunk_size):
-                chunk = list(codes[start : start + self._chunk_size])
-                rows = connection.execute(_CORE_DEVICES, {"codes": chunk}).all()
-                devices.extend(
-                    CoreDevice(str(row[0]), None if row[1] is None else str(row[1]))
-                    for row in rows
-                )
+        try:
+            with self._core.connect() as connection:
+                for start in range(0, len(codes), self._chunk_size):
+                    chunk = list(codes[start : start + self._chunk_size])
+                    rows = connection.execute(_CORE_DEVICES, {"codes": chunk}).all()
+                    devices.extend(
+                        CoreDevice(str(row[0]), None if row[1] is None else str(row[1]))
+                        for row in rows
+                    )
+        except DBAPIError as error:
+            raise failure_for(error, "enddevice") from None
         return devices
