@@ -69,10 +69,10 @@ def test_metadata_contains_every_mapped_table() -> None:
     assert BASELINE_TABLES | TASK_2_TABLES <= set(Base.metadata.tables)
 
 
-def test_workflow_schedule_gains_configuration_version_link() -> None:
-    """The schedule references a configuration version before 0008 makes it required."""
+def test_workflow_schedule_requires_a_configuration_version_link() -> None:
+    """Since 0008 a schedule cannot exist without the configuration version it runs under."""
 
     columns = WorkflowSchedule.__table__.columns
     assert "configuration_version_id" in columns
-    assert columns["configuration_version_id"].nullable is True
+    assert columns["configuration_version_id"].nullable is False
     assert "updated_at" in columns

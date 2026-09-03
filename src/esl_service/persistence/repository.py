@@ -11,7 +11,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 from uuid import UUID
 
-from sqlalchemy import CursorResult, select, update
+from sqlalchemy import CursorResult, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session, selectinload
 
@@ -58,8 +58,15 @@ class ExecutionRepository:
     def __init__(self, session: Session) -> None:
         self._session = session
 
-    def create_execution(self, request: NewExecution) -> WorkflowExecution:
-        """Create a QUEUED execution from its complete, reproducible input scope."""
+    def create_execution(
+        self, request: NewExecution, *, now: datetime | None = None
+    ) -> WorkflowExecution:
+        """Create a QUEUED execution from its complete, reproducible input scope.
+
+        ``started_at`` is the launch instant the caller already holds, so a
+        launch and its scope claim share one clock reading; the worker orders
+        runnable executions by it.
+        """
 
         execution = WorkflowExecution(
             workflow_name=request.workflow_name,
@@ -75,7 +82,7 @@ class ExecutionRepository:
             reason=request.reason,
             retry_of_execution_id=request.retry_of_execution_id,
             replay_of_execution_id=request.replay_of_execution_id,
-            started_at=datetime.now(UTC),
+            started_at=now or datetime.now(UTC),
             status=ExecutionStatus.QUEUED.value,
         )
         self._session.add(execution)
@@ -117,17 +124,26 @@ class ExecutionRepository:
         requested_status: ExecutionStatus,
         *,
         terminal_reason: str | None = None,
+        retry_not_before: datetime | None = None,
     ) -> WorkflowExecution:
         """Apply a validated transition and append its evidence atomically.
 
         The domain graph rejects an invalid change before any write. A rejected
         transition raises without persisting, and its exception carries the
         audit event so the caller can record it on a transaction it controls.
+
+        ``retry_not_before`` is kept only while the execution is in
+        ``RETRY_WAIT``; every other transition clears it (0008).
         """
 
         audit_event = transition_execution(expected_status, requested_status)
         now = datetime.now(UTC)
-        values: dict[str, object] = {"status": requested_status.value}
+        values: dict[str, object] = {
+            "status": requested_status.value,
+            "retry_not_before": (
+                retry_not_before if requested_status is ExecutionStatus.RETRY_WAIT else None
+            ),
+        }
         if terminal_reason is not None:
             values["terminal_reason"] = terminal_reason
         if is_terminal(requested_status):
@@ -395,7 +411,7 @@ class ExecutionRepository:
         statement = (
             select(ExecutionStep)
             .where(ExecutionStep.execution_id == execution_id)
-            .order_by(ExecutionStep.started_at, ExecutionStep.attempt)
+            .order_by(ExecutionStep.sequence)
             .options(selectinload(ExecutionStep.checkpoints))
         )
         latest: dict[str, ExecutionStep] = {}
@@ -403,7 +419,7 @@ class ExecutionRepository:
             current = latest.get(step.step_name)
             if current is None or step.attempt > current.attempt:
                 latest[step.step_name] = step
-        return sorted(latest.values(), key=lambda step: (step.started_at, step.attempt))
+        return sorted(latest.values(), key=lambda step: step.sequence)
 
     def configuration_hash_of(self, configuration_version_id: UUID) -> str:
         """Return the content hash of one configuration version (#104 actions record it)."""
@@ -415,11 +431,13 @@ class ExecutionRepository:
             raise LookupError(f"no configuration version with id {configuration_version_id}")
         return version.content_hash
 
-    def runnable_executions(self, *, limit: int) -> list[UUID]:
-        """Return executions the worker may run now, oldest first.
+    def runnable_executions(self, *, limit: int, now: datetime) -> list[UUID]:
+        """Return executions the worker may run at ``now``, oldest first.
 
         QUEUED, RETRY_WAIT, and RECOVERING are runnable; RUNNING is not,
         because a live process owns it until ``recover_all`` says otherwise.
+        A RETRY_WAIT execution whose ``retry_not_before`` lies after ``now``
+        is not yet due (0008), so its bounded delay holds across a restart.
         """
 
         statement = (
@@ -431,7 +449,11 @@ class ExecutionRepository:
                         ExecutionStatus.RETRY_WAIT.value,
                         ExecutionStatus.RECOVERING.value,
                     ]
-                )
+                ),
+                or_(
+                    WorkflowExecution.retry_not_before.is_(None),
+                    WorkflowExecution.retry_not_before <= now,
+                ),
             )
             .order_by(WorkflowExecution.started_at, WorkflowExecution.id)
             .limit(limit)

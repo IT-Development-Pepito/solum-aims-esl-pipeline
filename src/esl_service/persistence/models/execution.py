@@ -17,6 +17,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PostgreSQLUUID
@@ -88,6 +89,11 @@ class WorkflowExecution(Base):
     )
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="started")
     terminal_reason: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    # Set on RETRY_WAIT and cleared on RUNNING (0008): the worker does not pick
+    # the execution before this instant, so a retry delay survives a restart.
+    retry_not_before: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -260,6 +266,17 @@ class WorkflowSchedule(Base):
     """Persisted configuration for a workflow schedule."""
 
     __tablename__ = "workflow_schedule"
+    __table_args__ = (
+        # One active schedule per workflow and store (architecture 5.9); a
+        # disabled schedule stays as history beside its replacement.
+        Index(
+            "uq_workflow_schedule_active_scope",
+            "workflow_name",
+            "store_code",
+            unique=True,
+            postgresql_where=text("enabled"),
+        ),
+    )
 
     id: Mapped[UUID] = mapped_column(
         PostgreSQLUUID(as_uuid=True), primary_key=True, default=uuid4
@@ -269,12 +286,11 @@ class WorkflowSchedule(Base):
     cron_expression: Mapped[str] = mapped_column(Text, nullable=False)
     timezone: Mapped[str] = mapped_column(String(100), nullable=False)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    # Nullable until 0008 makes it required after an explicit backfill and
-    # preflight; new application writes must already supply a version.
-    configuration_version_id: Mapped[UUID | None] = mapped_column(
+    # Required since 0008; the gate refuses to run over a schedule without one.
+    configuration_version_id: Mapped[UUID] = mapped_column(
         PostgreSQLUUID(as_uuid=True),
         ForeignKey("configuration_version.id", ondelete="RESTRICT"),
-        nullable=True,
+        nullable=False,
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
@@ -312,6 +328,11 @@ class ExecutionStep(Base):
     )
     step_name: Mapped[str] = mapped_column(String(100), nullable=False)
     attempt: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    # Monotonic start order (0008): a coarse host clock stamps a whole run's
+    # steps with one instant, and the procedure's order must survive that.
+    sequence: Mapped[int] = mapped_column(
+        BigInteger, Identity(always=False), nullable=False, unique=True
+    )
     outcome: Mapped[str] = mapped_column(String(32), nullable=False)
     failure_class: Mapped[str | None] = mapped_column(String(32), nullable=True)
     started_at: Mapped[datetime] = mapped_column(

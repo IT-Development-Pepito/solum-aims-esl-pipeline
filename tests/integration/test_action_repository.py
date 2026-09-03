@@ -246,6 +246,10 @@ def test_unknown_outcome_requires_reconciliation(
     session.flush()
 
     assert [item.id for item in action_repository.unresolved_actions()] == [action.id]
+    # The recovery report (#21) asks per execution.
+    owner = _execution_of(result_id, session)
+    assert [item.id for item in action_repository.unresolved_actions(execution_id=owner)] == [action.id]
+    assert action_repository.unresolved_actions(execution_id=uuid4()) == []
 
     with pytest.raises(InvalidActionTransition):
         action_repository.transition(action.id, ActionState.SUBMITTING)

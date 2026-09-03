@@ -504,7 +504,7 @@ class LaunchRepository:
         # The execution insert is undone if the atomic claim loses a race, so
         # no run ever exists without owning the scope it was created for.
         savepoint = self._session.begin_nested()
-        execution = self._executions.create_execution(request)
+        execution = self._executions.create_execution(request, now=now)
         if not self._executions.claim_scope(execution.id, scope, now=now):
             savepoint.rollback()
             raise ScopeContention(f"scope {scope} was taken during the launch")

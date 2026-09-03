@@ -9,7 +9,7 @@ execution in RETRY_WAIT with its evidence; a second run completes it.
 
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from functools import partial
 from uuid import UUID, uuid4
@@ -29,6 +29,7 @@ from esl_service.application.contracts import (
     WarehouseReadResult,
 )
 from esl_service.application.persist_run import persist_run
+from esl_service.application.recovery import report_for
 from esl_service.application.runner import (
     RUN_STEPS,
     STEP_READ_STORE,
@@ -128,17 +129,20 @@ def runner_parts(session: Session) -> tuple[ExecutionRepository, WorkflowRunner,
     return executions, runner, sources
 
 
-def launch(session: Session, configuration_version_id: UUID) -> UUID:
+def launch(
+    session: Session, configuration_version_id: UUID, *, store_code: str = "084", now: datetime | None = None
+) -> UUID:
     result = LaunchRepository(session).launch_manual(
         ManualLaunch(requested_by="ops.alice", reason="CHG-1"),
         workflow_name="esl-refresh",
-        store_code="084",
+        store_code=store_code,
         mode=ExecutionMode.SHADOW,
         correlation_id=uuid4(),
         source_window_start=WINDOW.start,
         source_window_end=WINDOW.end,
         configuration_version_id=configuration_version_id,
         rule_version="compatibility-v1",
+        now=now,
     )
     assert result.execution is not None
     session.flush()
@@ -158,7 +162,7 @@ def test_a_launched_execution_runs_to_succeeded_with_durable_steps_and_evidence(
     assert outcome.status is ExecutionStatus.SUCCEEDED_WITH_EXCEPTIONS  # SKU-2 was excluded (rejected > 0)
     assert execution.status == ExecutionStatus.SUCCEEDED_WITH_EXCEPTIONS.value
     assert execution.ended_at is not None
-    steps = session.scalars(select(ExecutionStep).where(ExecutionStep.execution_id == execution_id).order_by(ExecutionStep.started_at)).all()
+    steps = session.scalars(select(ExecutionStep).where(ExecutionStep.execution_id == execution_id).order_by(ExecutionStep.sequence)).all()
     assert [s.step_name for s in steps] == list(RUN_STEPS)
     assert {s.outcome for s in steps} == {"SUCCEEDED"}
     checkpoints = session.scalars(select(ExecutionCheckpoint).join(ExecutionStep).where(ExecutionStep.execution_id == execution_id)).all()
@@ -181,7 +185,12 @@ def test_a_retryable_source_failure_leaves_retry_wait_and_a_second_run_completes
     first = runner.run(execution_id)
     session.expire_all()
     assert first.status is ExecutionStatus.RETRY_WAIT
-    assert session.get_one(WorkflowExecution, execution_id).status == "RETRY_WAIT"
+    waiting = session.get_one(WorkflowExecution, execution_id)
+    assert waiting.status == "RETRY_WAIT"
+    assert first.retry_after_seconds is not None
+    assert waiting.retry_not_before == datetime(2026, 9, 2, 0, 31, tzinfo=UTC) + timedelta(
+        seconds=float(first.retry_after_seconds)
+    )
     assert executions.get_lease("esl-refresh:084").released_at is None  # type: ignore[union-attr]
 
     sources.fail_store_read = None
@@ -189,6 +198,7 @@ def test_a_retryable_source_failure_leaves_retry_wait_and_a_second_run_completes
 
     session.expire_all()
     assert second.status is ExecutionStatus.SUCCEEDED_WITH_EXCEPTIONS
+    assert session.get_one(WorkflowExecution, execution_id).retry_not_before is None
     attempts = session.scalars(select(ExecutionStep.attempt).where(ExecutionStep.execution_id == execution_id, ExecutionStep.step_name == STEP_READ_STORE).order_by(ExecutionStep.attempt)).all()
     assert attempts == [1, 2]
     assert sources.calls.count("discover") == 1  # resumed from the discover checkpoint
@@ -197,19 +207,19 @@ def test_a_retryable_source_failure_leaves_retry_wait_and_a_second_run_completes
 def test_runnable_executions_are_listed_oldest_first(
     session: Session, runner_parts: tuple[ExecutionRepository, WorkflowRunner, FakeSources], configuration_version_id: UUID
 ) -> None:
+    """Oldest by launch instant, not by insertion order or by id.
+
+    The later-inserted execution carries the earlier instant, so a listing
+    that followed insertion order, or a tie broken by random id, would fail.
+    """
+
     executions, _, _ = runner_parts
-    first = launch(session, configuration_version_id)
-    other = LaunchRepository(session).launch_manual(
-        ManualLaunch(requested_by="ops.alice", reason="CHG-2"),
-        workflow_name="esl-refresh", store_code="075", mode=ExecutionMode.SHADOW, correlation_id=uuid4(),
-        source_window_start=WINDOW.start, source_window_end=WINDOW.end,
-        configuration_version_id=configuration_version_id, rule_version="compatibility-v1",
-    )
-    assert other.execution is not None
+    later = launch(session, configuration_version_id, now=datetime(2026, 9, 2, 0, 0, 1, tzinfo=UTC))
+    earlier = launch(session, configuration_version_id, store_code="075", now=datetime(2026, 9, 2, 0, 0, 0, tzinfo=UTC))
 
-    ids = executions.runnable_executions(limit=10)
+    ids = executions.runnable_executions(limit=10, now=datetime(2026, 9, 2, 0, 0, 2, tzinfo=UTC))
 
-    assert ids == [first, other.execution.id]
+    assert ids == [earlier, later]
 
 
 def test_step_history_returns_the_latest_attempt_per_step_with_checkpoints(
@@ -227,3 +237,27 @@ def test_step_history_returns_the_latest_attempt_per_step_with_checkpoints(
     by_name = {s.step_name: s for s in history}
     assert by_name[STEP_READ_STORE].attempt == 2 and by_name[STEP_READ_STORE].outcome == "SUCCEEDED"
     assert by_name["discover"].checkpoints[0].payload["store_code"] == "084"
+
+
+def test_the_recovery_report_of_a_waiting_run_names_its_checkpoint_and_due_time(
+    session: Session, runner_parts: tuple[ExecutionRepository, WorkflowRunner, FakeSources], configuration_version_id: UUID
+) -> None:
+    """The four recovery fields come from the state store alone (#21, FR-016)."""
+
+    executions, runner, sources = runner_parts
+    execution_id = launch(session, configuration_version_id)
+    sources.fail_store_read = FailureSignal(DependencyKind.SQL_SERVER, FailureKind.UNAVAILABLE)
+    runner.run(execution_id)
+    session.expire_all()
+
+    report = report_for(
+        execution_id, executions=executions, actions=ActionRepository(session),
+        now=datetime(2026, 9, 2, 0, 31, tzinfo=UTC),
+    )
+
+    assert report.scope == "esl-refresh:084"
+    assert report.status == "RETRY_WAIT"
+    assert report.checkpoint is not None and report.checkpoint.startswith("read-warehouse:done @ ")
+    assert report.resume_from == STEP_READ_STORE
+    assert report.external_uncertainty == ()
+    assert report.next_operator_action.startswith("None: the retry is due at 2026-09-02T00:31:01+00:00")

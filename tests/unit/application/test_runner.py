@@ -9,7 +9,7 @@ sequencing itself is what is proved.
 
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
@@ -86,6 +86,7 @@ class FakeExecution:
     configuration_version_id: UUID = field(default_factory=uuid4)
     rule_version: str = "compatibility-v1"
     correlation_id: UUID = field(default_factory=uuid4)
+    retry_not_before: datetime | None = None
 
 
 @dataclass
@@ -121,13 +122,18 @@ class FakeExecutions:
     def get_execution(self, execution_id: UUID) -> FakeExecution:
         return self.executions[execution_id]
 
-    def transition_execution(self, execution_id: UUID, expected: ExecutionStatus, requested: ExecutionStatus, *, terminal_reason: str | None = None) -> FakeExecution:
+    def transition_execution(
+        self, execution_id: UUID, expected: ExecutionStatus, requested: ExecutionStatus, *,
+        terminal_reason: str | None = None, retry_not_before: datetime | None = None,
+    ) -> FakeExecution:
         execution = self.executions[execution_id]
         assert execution.status == expected.value, (execution.status, expected)
         from esl_service.domain.workflow import transition_execution
 
         transition_execution(expected, requested)  # the #14 graph decides
         execution.status = requested.value
+        # Mirrors the repository: a due time belongs to RETRY_WAIT only.
+        execution.retry_not_before = retry_not_before if requested is ExecutionStatus.RETRY_WAIT else None
         self.transitions.append((expected.value, requested.value))
         if terminal_reason is not None:
             self.terminal_reason = terminal_reason
@@ -367,6 +373,19 @@ def test_a_retryable_failure_schedules_a_bounded_retry() -> None:
     assert events and events[0][2]["step"] == STEP_READ_STORE and events[0][2]["attempt"] == 1
 
 
+def test_a_retryable_failure_records_when_the_retry_is_due() -> None:
+    """The due time is durable state, so the delay survives a process restart (0008)."""
+
+    harness = build(sources=FakeSources(fail_store_read=FailureSignal(DependencyKind.SQL_SERVER, FailureKind.UNAVAILABLE)))
+    execution = queued(harness)
+
+    outcome = harness.runner.run(execution.id)
+
+    assert outcome.retry_after_seconds is not None
+    expected = datetime(2026, 9, 2, 0, 31, tzinfo=UTC) + timedelta(seconds=float(outcome.retry_after_seconds))
+    assert harness.executions.executions[execution.id].retry_not_before == expected
+
+
 def test_a_retry_resumes_and_repeats_only_the_failed_step_onwards() -> None:
     sources = FakeSources(fail_store_read=FailureSignal(DependencyKind.SQL_SERVER, FailureKind.UNAVAILABLE))
     harness = build(sources=sources)
@@ -379,6 +398,7 @@ def test_a_retry_resumes_and_repeats_only_the_failed_step_onwards() -> None:
 
     assert outcome.status is ExecutionStatus.SUCCEEDED
     assert harness.executions.transitions[-2:] == [("RETRY_WAIT", "RUNNING"), ("RUNNING", "SUCCEEDED")]
+    assert harness.executions.executions[execution.id].retry_not_before is None
     read_store_attempts = [s.attempt for s in harness.executions.steps if s.step_name == STEP_READ_STORE]
     assert read_store_attempts == [1, 2]
     assert "discover" not in sources.calls  # the discovered entry is in the checkpoint

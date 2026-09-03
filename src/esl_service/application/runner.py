@@ -25,7 +25,7 @@ failure is recorded by classification and step, never by driver text.
 import random
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any, Protocol
 from uuid import UUID
@@ -162,6 +162,7 @@ class RunnerExecutionPort(Protocol):
         requested_status: ExecutionStatus,
         *,
         terminal_reason: str | None = None,
+        retry_not_before: datetime | None = None,
     ) -> object: ...
 
     def start_step(self, execution_id: UUID, step_name: str, *, attempt: int = 1) -> StepRow: ...
@@ -476,7 +477,14 @@ class WorkflowRunner:
         )
         if self._policy.should_retry(failure_class, attempt):
             delay = self._policy.delay_for(attempt, jitter=self._jitter())
-            self._executions.transition_execution(execution_id, ExecutionStatus.RUNNING, ExecutionStatus.RETRY_WAIT)
+            # The due time is durable (0008): the worker does not pick the run
+            # before it, so the bounded delay holds across a process restart.
+            self._executions.transition_execution(
+                execution_id,
+                ExecutionStatus.RUNNING,
+                ExecutionStatus.RETRY_WAIT,
+                retry_not_before=self._clock() + timedelta(seconds=float(delay)),
+            )
             self._executions.append_event(
                 execution_id, EVENT_RUN_RETRY_SCHEDULED, {"step": step_name, "attempt": attempt, "retry_after_seconds": str(delay)}
             )
