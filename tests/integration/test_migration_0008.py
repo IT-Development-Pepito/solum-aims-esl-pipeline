@@ -202,9 +202,11 @@ def test_runnable_executions_skip_a_retry_that_is_not_yet_due(
     session: Session, execution_repository: ExecutionRepository, configuration_version_id: UUID
 ) -> None:
     now = datetime(2026, 9, 3, 12, 0, tzinfo=UTC)
-    due = execution_repository.create_execution(new_execution(configuration_version_id), now=now)
+    due = execution_repository.create_execution(
+        new_execution(configuration_version_id), now=now - timedelta(minutes=2)
+    )
     not_due = execution_repository.create_execution(
-        new_execution(configuration_version_id, store_code="075"), now=now
+        new_execution(configuration_version_id, store_code="075"), now=now - timedelta(minutes=1)
     )
     session.get_one(WorkflowExecution, due.id).retry_not_before = now - timedelta(seconds=1)
     session.get_one(WorkflowExecution, not_due.id).retry_not_before = now + timedelta(seconds=30)

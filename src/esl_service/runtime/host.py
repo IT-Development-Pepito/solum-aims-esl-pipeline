@@ -342,11 +342,21 @@ class RunnerPorts(TransactionalPorts):
             return ExecutionRepository(session).get_execution(execution_id)
 
     def transition_execution(
-        self, execution_id: UUID, expected_status: Any, requested_status: Any, *, terminal_reason: str | None = None
+        self,
+        execution_id: UUID,
+        expected_status: Any,
+        requested_status: Any,
+        *,
+        terminal_reason: str | None = None,
+        retry_not_before: datetime | None = None,
     ) -> Any:
         with self._scope() as session:
             return ExecutionRepository(session).transition_execution(
-                execution_id, expected_status, requested_status, terminal_reason=terminal_reason
+                execution_id,
+                expected_status,
+                requested_status,
+                terminal_reason=terminal_reason,
+                retry_not_before=retry_not_before,
             )
 
     def start_step(self, execution_id: UUID, step_name: str, *, attempt: int = 1) -> Any:

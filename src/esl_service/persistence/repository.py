@@ -124,17 +124,26 @@ class ExecutionRepository:
         requested_status: ExecutionStatus,
         *,
         terminal_reason: str | None = None,
+        retry_not_before: datetime | None = None,
     ) -> WorkflowExecution:
         """Apply a validated transition and append its evidence atomically.
 
         The domain graph rejects an invalid change before any write. A rejected
         transition raises without persisting, and its exception carries the
         audit event so the caller can record it on a transaction it controls.
+
+        ``retry_not_before`` is kept only while the execution is in
+        ``RETRY_WAIT``; every other transition clears it (0008).
         """
 
         audit_event = transition_execution(expected_status, requested_status)
         now = datetime.now(UTC)
-        values: dict[str, object] = {"status": requested_status.value}
+        values: dict[str, object] = {
+            "status": requested_status.value,
+            "retry_not_before": (
+                retry_not_before if requested_status is ExecutionStatus.RETRY_WAIT else None
+            ),
+        }
         if terminal_reason is not None:
             values["terminal_reason"] = terminal_reason
         if is_terminal(requested_status):

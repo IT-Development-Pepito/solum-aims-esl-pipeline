@@ -9,7 +9,7 @@ execution in RETRY_WAIT with its evidence; a second run completes it.
 
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from functools import partial
 from uuid import UUID, uuid4
@@ -184,7 +184,12 @@ def test_a_retryable_source_failure_leaves_retry_wait_and_a_second_run_completes
     first = runner.run(execution_id)
     session.expire_all()
     assert first.status is ExecutionStatus.RETRY_WAIT
-    assert session.get_one(WorkflowExecution, execution_id).status == "RETRY_WAIT"
+    waiting = session.get_one(WorkflowExecution, execution_id)
+    assert waiting.status == "RETRY_WAIT"
+    assert first.retry_after_seconds is not None
+    assert waiting.retry_not_before == datetime(2026, 9, 2, 0, 31, tzinfo=UTC) + timedelta(
+        seconds=float(first.retry_after_seconds)
+    )
     assert executions.get_lease("esl-refresh:084").released_at is None  # type: ignore[union-attr]
 
     sources.fail_store_read = None
@@ -192,6 +197,7 @@ def test_a_retryable_source_failure_leaves_retry_wait_and_a_second_run_completes
 
     session.expire_all()
     assert second.status is ExecutionStatus.SUCCEEDED_WITH_EXCEPTIONS
+    assert session.get_one(WorkflowExecution, execution_id).retry_not_before is None
     attempts = session.scalars(select(ExecutionStep.attempt).where(ExecutionStep.execution_id == execution_id, ExecutionStep.step_name == STEP_READ_STORE).order_by(ExecutionStep.attempt)).all()
     assert attempts == [1, 2]
     assert sources.calls.count("discover") == 1  # resumed from the discover checkpoint
