@@ -8,22 +8,34 @@ the least-privilege proof are integration tests against the local clone.
 """
 
 import inspect
+import socket
+from typing import Self
 
 import pytest
+from sqlalchemy.engine import make_url
+from sqlalchemy.exc import OperationalError
 
 from esl_service.adapters.aims_compatibility import (
     AIMS_READ_ACTION,
     AIMS_READ_SCHEMA_VERSION,
     AimsCompatibilityReader,
     AimsSchemaDrift,
+    AimsUnavailable,
     CoreDevice,
     PortalLabel,
     ReadEvidence,
+    create_read_only_engine,
+    failure_for,
     merge_labels,
     parse_current_page,
 )
 from esl_service.application.contracts import AimsLabel, AimsReadModelReader
-from esl_service.domain.failures import DependencyKind, FailureKind
+from esl_service.domain.failures import (
+    DependencyKind,
+    FailureClass,
+    FailureKind,
+    classify,
+)
 
 # --- the page is a JSON field inside a varchar, and -1 is a sentinel -------
 
@@ -182,3 +194,126 @@ def test_schema_drift_maps_to_the_documented_failure_signal() -> None:
     assert error.signal.kind is FailureKind.SCHEMA_DRIFT
     assert "end_device" in str(error)
     assert "://" not in str(error)
+
+
+# --- an unreachable database is unavailable, never drift (#110) ---------------
+
+
+class _DriverError(Exception):
+    """The shape psycopg gives a server or connection error: a ``sqlstate``."""
+
+    def __init__(self, sqlstate: str | None) -> None:
+        super().__init__("postgresql://reader:hunter2@aims.example/AIMS_PORTAL_DB refused")
+        self.sqlstate = sqlstate
+
+
+def _driver_error(sqlstate: str | None) -> OperationalError:
+    return OperationalError("SELECT 1", {}, _DriverError(sqlstate))
+
+
+def test_unavailable_maps_to_the_documented_failure_signal() -> None:
+    """Architecture section 8: an unavailable compatibility DB is retryable."""
+
+    error = AimsUnavailable("end_device")
+
+    assert error.signal.dependency is DependencyKind.AIMS_COMPATIBILITY
+    assert error.signal.kind is FailureKind.UNAVAILABLE
+    assert classify(error.signal) is FailureClass.RETRYABLE
+    assert "end_device" in str(error)
+    assert "://" not in str(error)
+
+
+@pytest.mark.parametrize("sqlstate", ["42P01", "42703", "3F000"])
+def test_a_missing_relation_or_column_is_schema_drift(sqlstate: str) -> None:
+    failure = failure_for(_driver_error(sqlstate), "enddevice")
+
+    assert isinstance(failure, AimsSchemaDrift)
+    assert failure.relation == "enddevice"
+
+
+@pytest.mark.parametrize("sqlstate", [None, "08001", "08006", "57P01", "28P01", "42501"])
+def test_any_other_driver_error_is_unavailable(sqlstate: str | None) -> None:
+    failure = failure_for(_driver_error(sqlstate), "enddevice")
+
+    assert isinstance(failure, AimsUnavailable)
+    assert failure.relation == "enddevice"
+
+
+def test_the_classified_failure_never_carries_the_driver_text() -> None:
+    for sqlstate in ("42P01", None):
+        failure = failure_for(_driver_error(sqlstate), "end_device")
+        assert "hunter2" not in str(failure)
+        assert "://" not in str(failure)
+        assert failure.__cause__ is None
+
+
+def test_a_refused_connection_on_the_probe_is_unavailable_not_drift() -> None:
+    """Nothing listens on the port; that is an outage, not a changed relation.
+
+    The port was bound and released a moment ago, so nothing answers. Some hosts
+    drop rather than refuse, so the driver is given a short connect timeout.
+    """
+
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    dead = create_read_only_engine(
+        make_url(f"postgresql+psycopg://reader:hunter2@127.0.0.1:{port}/AIMS?connect_timeout=2")
+    )
+    try:
+        with pytest.raises(AimsUnavailable) as error:
+            AimsCompatibilityReader(dead, dead).fetch_labels("084")
+    finally:
+        dead.dispose()
+
+    assert error.value.signal.kind is FailureKind.UNAVAILABLE
+    assert "hunter2" not in str(error.value)
+
+
+class _Connection:
+    def __init__(self, failing: str | None) -> None:
+        self._failing = failing
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        return None
+
+    def execute(self, statement: object, params: object = None) -> Self:
+        if self._failing is not None and self._failing in str(statement):
+            raise _driver_error("08006")
+        return self
+
+    def all(self) -> list[tuple[str, str]]:
+        return [("L1", "084")]
+
+
+class _Engine:
+    """Probes succeed; the statement containing ``failing`` raises like a dropped link."""
+
+    def __init__(self, failing: str | None = None) -> None:
+        self._failing = failing
+
+    def connect(self) -> _Connection:
+        return _Connection(self._failing)
+
+
+def test_a_driver_error_while_reading_portal_labels_is_classified() -> None:
+    reader = AimsCompatibilityReader(_Engine(failing="station_code = :store"), _Engine())  # type: ignore[arg-type]
+
+    with pytest.raises(AimsUnavailable) as error:
+        reader.fetch_labels("084")
+
+    assert error.value.relation == "end_device"
+    assert "hunter2" not in str(error.value)
+
+
+def test_a_driver_error_while_reading_core_devices_is_classified() -> None:
+    reader = AimsCompatibilityReader(_Engine(), _Engine(failing="ANY(:codes)"))  # type: ignore[arg-type]
+
+    with pytest.raises(AimsUnavailable) as error:
+        reader.fetch_labels("084")
+
+    assert error.value.relation == "enddevice"
+    assert "hunter2" not in str(error.value)
