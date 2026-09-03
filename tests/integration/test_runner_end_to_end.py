@@ -29,6 +29,7 @@ from esl_service.application.contracts import (
     WarehouseReadResult,
 )
 from esl_service.application.persist_run import persist_run
+from esl_service.application.recovery import report_for
 from esl_service.application.runner import (
     RUN_STEPS,
     STEP_READ_STORE,
@@ -236,3 +237,27 @@ def test_step_history_returns_the_latest_attempt_per_step_with_checkpoints(
     by_name = {s.step_name: s for s in history}
     assert by_name[STEP_READ_STORE].attempt == 2 and by_name[STEP_READ_STORE].outcome == "SUCCEEDED"
     assert by_name["discover"].checkpoints[0].payload["store_code"] == "084"
+
+
+def test_the_recovery_report_of_a_waiting_run_names_its_checkpoint_and_due_time(
+    session: Session, runner_parts: tuple[ExecutionRepository, WorkflowRunner, FakeSources], configuration_version_id: UUID
+) -> None:
+    """The four recovery fields come from the state store alone (#21, FR-016)."""
+
+    executions, runner, sources = runner_parts
+    execution_id = launch(session, configuration_version_id)
+    sources.fail_store_read = FailureSignal(DependencyKind.SQL_SERVER, FailureKind.UNAVAILABLE)
+    runner.run(execution_id)
+    session.expire_all()
+
+    report = report_for(
+        execution_id, executions=executions, actions=ActionRepository(session),
+        now=datetime(2026, 9, 2, 0, 31, tzinfo=UTC),
+    )
+
+    assert report.scope == "esl-refresh:084"
+    assert report.status == "RETRY_WAIT"
+    assert report.checkpoint is not None and report.checkpoint.startswith("read-warehouse:done @ ")
+    assert report.resume_from == STEP_READ_STORE
+    assert report.external_uncertainty == ()
+    assert report.next_operator_action.startswith("None: the retry is due at 2026-09-02T00:31:01+00:00")

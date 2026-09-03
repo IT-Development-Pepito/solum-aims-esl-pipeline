@@ -209,11 +209,12 @@ class ActionRepository:
         self._session.flush()
         return stored
 
-    def unresolved_actions(self) -> list[RecordAction]:
+    def unresolved_actions(self, *, execution_id: UUID | None = None) -> list[RecordAction]:
         """Return actions whose external outcome is unknown (FR-013).
 
         These block completion and must be reconciled by an operator; they are
-        never resubmitted automatically.
+        never resubmitted automatically. ``execution_id`` narrows the list to
+        one run, which is how the recovery report (#21) asks.
         """
 
         statement = (
@@ -222,4 +223,6 @@ class ActionRepository:
             .order_by(RecordAction.occurred_at, RecordAction.id)
             .options(selectinload(RecordAction.attempts))
         )
+        if execution_id is not None:
+            statement = statement.where(RecordAction.execution_id == execution_id)
         return list(self._session.scalars(statement))
