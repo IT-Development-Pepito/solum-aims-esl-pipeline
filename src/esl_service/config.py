@@ -451,6 +451,10 @@ class Settings(BaseSettings):
     # measured targets (NFR-004): review against a workload baseline.
     source_store_concurrency: int = Field(default=4, ge=1, le=32)
     source_store_read_timeout_seconds: int = Field(default=120, ge=1)
+    # How many executions the worker (#102) runs at once. One is the safe
+    # default until a workload baseline exists (NFR-004); the scope lease
+    # (#17) keeps one run per workflow and store regardless.
+    worker_concurrency: int = Field(default=1, ge=1, le=8)
     aims_host: str = ""
     aims_port: int = 5432
     aims_portal_database: str = ""

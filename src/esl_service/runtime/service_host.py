@@ -61,6 +61,14 @@ class Ticker(Protocol):
     def stop(self, *, deadline_seconds: float) -> bool: ...
 
 
+class WorkerControl(Ticker, Protocol):
+    """The run loop (#102): started and stopped like the ticker, and quiesced like the scheduler."""
+
+    def pause(self) -> None: ...
+
+    def resume(self) -> None: ...
+
+
 class ServiceHost:
     """The lifecycle state machine behind the Windows Service."""
 
@@ -70,11 +78,13 @@ class ServiceHost:
         scheduler: Quiescable,
         ticker: Ticker,
         audit: AuditPort,
+        worker: WorkerControl | None = None,
         stop_deadline_seconds: float = 30,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         self._scheduler = scheduler
         self._ticker = ticker
+        self._worker = worker
         self._audit = audit
         self._deadline = stop_deadline_seconds
         self._clock = clock
@@ -99,18 +109,24 @@ class ServiceHost:
         self._require(ServiceState.STOPPED, "start")
         self._scheduler.resume()
         self._ticker.start()
+        if self._worker is not None:
+            self._worker.start()
         self._state = ServiceState.RUNNING
         self._record(SERVICE_STARTED, "service start", {"state": self._state.value})
 
     def pause(self, *, reason: str) -> None:
         self._require(ServiceState.RUNNING, "pause")
         self._scheduler.pause()
+        if self._worker is not None:
+            self._worker.pause()
         self._state = ServiceState.PAUSED
         self._record(SERVICE_PAUSED, reason, {"state": self._state.value})
 
     def resume(self, *, reason: str) -> None:
         self._require(ServiceState.PAUSED, "resume")
         self._scheduler.resume()
+        if self._worker is not None:
+            self._worker.resume()
         self._state = ServiceState.RUNNING
         self._record(SERVICE_RESUMED, reason, {"state": self._state.value})
 
@@ -119,11 +135,20 @@ class ServiceHost:
             raise InvalidLifecycleTransition("cannot stop: the service is already stopped")
         self._scheduler.pause()
         stopped_in_time = self._ticker.stop(deadline_seconds=self._deadline)
+        # The worker stops after the scheduler is paused, so no new run is
+        # launched while runs in flight finish their current step (#102).
+        worker_stopped_in_time = (
+            self._worker.stop(deadline_seconds=self._deadline) if self._worker is not None else True
+        )
         self._state = ServiceState.STOPPED
         self._record(
             SERVICE_STOPPED,
             reason,
-            {"state": self._state.value, "ticker_stopped_in_time": stopped_in_time},
+            {
+                "state": self._state.value,
+                "ticker_stopped_in_time": stopped_in_time,
+                "worker_stopped_in_time": worker_stopped_in_time,
+            },
         )
 
     # -- helpers -------------------------------------------------------------

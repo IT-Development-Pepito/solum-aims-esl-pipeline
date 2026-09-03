@@ -253,6 +253,46 @@ def test_runs_show_prints_one_run_and_exits_one_when_absent(
     assert missing.exit_code == 1
 
 
+def test_runs_show_reports_the_steps_and_their_last_checkpoint(
+    repositories: FakeRepositories, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#102: an operator sees which step a run is at without reading tables."""
+
+    from dataclasses import dataclass as _dataclass
+
+    @_dataclass(frozen=True)
+    class Checkpoint:
+        checkpoint_key: str
+        watermark: str
+        payload: dict[str, object]
+
+    @_dataclass(frozen=True)
+    class Step:
+        step_name: str
+        attempt: int
+        outcome: str
+        failure_class: str | None
+        checkpoints: tuple[Checkpoint, ...]
+
+    runner.invoke(cli.app, START)
+    (execution,) = repositories.executions
+    monkeypatch.setattr(
+        cli_operations,
+        "_steps",
+        lambda execution_id: (
+            Step("discover", 1, "SUCCEEDED", None, (Checkpoint("discover:done", "084", {"store_code": "084"}),)),
+            Step("read-store", 2, "FAILED", "RETRYABLE", ()),
+        ),
+    )
+
+    result = runner.invoke(cli.app, ["runs", "show", str(execution.id)])
+
+    assert result.exit_code == 0, result.output
+    assert "discover" in result.output and "SUCCEEDED" in result.output
+    assert "read-store" in result.output and "attempt 2" in result.output and "RETRYABLE" in result.output
+    assert "discover:done" in result.output
+
+
 def test_runs_list_filters_by_store(repositories: FakeRepositories) -> None:
     runner.invoke(cli.app, START)
     other = [*START]
