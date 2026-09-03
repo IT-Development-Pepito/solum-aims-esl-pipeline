@@ -99,6 +99,60 @@ class ReconciliationRepository:
         self._session.flush()
         return report
 
+    def append_exception(
+        self,
+        report_id: UUID,
+        *,
+        category: str,
+        store_code: str | None,
+        item_code: str | None,
+        selling_uom: str | None,
+        expected_evidence: Mapping[str, JSONValue] | None,
+        actual_evidence: Mapping[str, JSONValue] | None,
+        record_processing_result_id: UUID | None = None,
+    ) -> ReconciliationException:
+        """Append one exception a step observed itself, after the report's own enumeration (#104).
+
+        Used for the shadow-mode legacy baseline comparison, whose evidence
+        is not a record issue or an action: the computed outbound state and
+        the legacy row are both recorded, and the category never claims
+        parity.
+        """
+
+        next_sequence = (
+            self._session.scalars(
+                select(func.coalesce(func.max(ReconciliationException.sequence), -1)).where(
+                    ReconciliationException.report_id == report_id
+                )
+            ).one()
+            + 1
+        )
+        exception = ReconciliationException(
+            report_id=report_id,
+            sequence=next_sequence,
+            category=category,
+            record_processing_result_id=record_processing_result_id,
+            store_code=store_code,
+            item_code=item_code,
+            selling_uom=selling_uom,
+            expected_evidence=_sanitized(expected_evidence),
+            actual_evidence=_sanitized(actual_evidence),
+            resolution_status=RESOLUTION_OPEN,
+        )
+        self._session.add(exception)
+        self._session.flush()
+        return exception
+
+    def latest_report(self, execution_id: UUID) -> ReconciliationReport | None:
+        """Return an execution's newest report revision, if one was finalized (#104)."""
+
+        statement = (
+            select(ReconciliationReport)
+            .where(ReconciliationReport.execution_id == execution_id)
+            .order_by(ReconciliationReport.revision.desc())
+        )
+        return self._session.scalars(statement).first()
+
     def list_exceptions(self, report_id: UUID) -> list[ReconciliationException]:
         """Return one report's enumerated exceptions in stable order."""
 

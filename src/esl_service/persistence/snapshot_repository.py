@@ -18,6 +18,7 @@ from esl_service.persistence.models import (
     CanonicalRecordSnapshot,
     RecordDifference,
     SnapshotSet,
+    WorkflowExecution,
 )
 
 
@@ -113,6 +114,51 @@ class SnapshotRepository:
         )
         self._session.flush()
         return snapshot_set
+
+    def find_snapshot_set(
+        self, execution_id: UUID, representation_kind: str
+    ) -> SnapshotSet | None:
+        """Return an execution's capture of one representation, if it exists (#104).
+
+        A persist step that restarts after a crash finds its own capture here
+        rather than opening a second one; the (execution, kind, adapter)
+        uniqueness makes the answer unambiguous.
+        """
+
+        statement = select(SnapshotSet).where(
+            SnapshotSet.execution_id == execution_id,
+            SnapshotSet.representation_kind == representation_kind,
+        )
+        return self._session.scalars(statement).first()
+
+    def previous_finalized_records(
+        self,
+        store_code: str,
+        representation_kind: str,
+        *,
+        exclude_execution_id: UUID,
+    ) -> list[CanonicalRecordSnapshot]:
+        """Return the store's latest finalized capture of one representation (#104).
+
+        The comparison baseline is the store's own previous snapshot (BR-018),
+        chosen by capture time among finalized sets (those with an aggregate
+        hash), never a set from the execution being persisted.
+        """
+
+        latest = self._session.scalars(
+            select(SnapshotSet)
+            .join(WorkflowExecution, WorkflowExecution.id == SnapshotSet.execution_id)
+            .where(
+                WorkflowExecution.store_code == store_code,
+                SnapshotSet.representation_kind == representation_kind,
+                SnapshotSet.execution_id != exclude_execution_id,
+                SnapshotSet.aggregate_hash.is_not(None),
+            )
+            .order_by(SnapshotSet.captured_at.desc(), SnapshotSet.id.desc())
+        ).first()
+        if latest is None:
+            return []
+        return self.list_records(latest.id)
 
     def list_records(self, snapshot_set_id: UUID) -> list[CanonicalRecordSnapshot]:
         """Return one capture's records ordered by their canonical business key."""
