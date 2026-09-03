@@ -283,7 +283,7 @@ Calls carry `Authorization: Bearer <token>`. A missing or unknown token is `401`
 1. Disable affected schedules if maintenance requires it.
 2. Confirm active executions and request graceful checkpoint/cancellation where needed.
 3. Restart using the approved Windows Service Control Manager command: **`<deployment-specific service restart>`**. A pause must stop new schedule claims and allow in-flight work to checkpoint/safely complete; do not use an abrupt process kill as a substitute.
-4. Confirm startup recovery has reconciled/resumed prior leases; inspect its recovery report.
+4. Confirm startup recovery has reconciled/resumed prior leases; inspect its recovery report. Its four fields, the scope, the checkpoint and the step a restart repeats, the actions with unknown external outcome, and the next operator action, are derived from durable state by `application/recovery.py` (#21); until #109 exposes them, **`esl-admin runs show`** lists the steps and last checkpoints they are derived from.
 5. Re-enable schedules only after readiness and dependency health are green.
 
 ## Common failure scenarios

@@ -960,6 +960,8 @@ Merge #27 and fast-forward develop.
 
 ### Task 8: Enforce migration/replay/CI gate (#21)
 
+> **2026-09-03:** #21 delivered the `0008` gate (preflight, NOT NULL schedule version, active-scope unique index, `retry_not_before`, `execution_step.sequence`) and the FR-016 recovery scenarios. The remaining items of this task were split by the owner: snapshot replay to #114, the Linux database-verify job and conditional `pywin32` to #115, and `DATA_MODEL_TRACEABILITY.md` with the supersession notices to #116. The step text below is kept as written, for history.
+
 **Files:**
 - Create: alembic/versions/0008_authoritative_model_gate.py
 - Create: tests/integration/test_authoritative_migration_chain.py
