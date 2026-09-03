@@ -318,6 +318,31 @@ def test_a_manual_launch_creates_an_execution_with_identity_and_reason(
     assert launched.execution.reason == "INC-1234 price correction"
 
 
+def test_a_manual_launch_starts_at_the_instant_it_was_launched(
+    launch_repository: LaunchRepository,
+    configuration_version_id: UUID,
+) -> None:
+    """``started_at`` is the launch instant, not a second clock read.
+
+    The worker orders runnable executions by ``started_at``; two launches
+    that read the wall clock separately can tie on a coarse host clock and
+    then order by random id.
+    """
+
+    instant = datetime(2026, 8, 31, 1, 2, 3, 456789, tzinfo=UTC)
+
+    launched = launch_repository.launch_manual(
+        ManualLaunch(requested_by="ops.alice", reason="INC-1 timing"),
+        workflow_name="esl-refresh",
+        store_code="084",
+        **scope(configuration_version_id),
+        now=instant,
+    )
+
+    assert launched.execution is not None
+    assert launched.execution.started_at == instant
+
+
 def test_a_manual_launch_is_audit_visible_against_its_execution(
     launch_repository: LaunchRepository,
     session: Session,

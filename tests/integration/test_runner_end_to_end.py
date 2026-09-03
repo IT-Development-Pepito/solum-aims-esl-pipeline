@@ -128,17 +128,20 @@ def runner_parts(session: Session) -> tuple[ExecutionRepository, WorkflowRunner,
     return executions, runner, sources
 
 
-def launch(session: Session, configuration_version_id: UUID) -> UUID:
+def launch(
+    session: Session, configuration_version_id: UUID, *, store_code: str = "084", now: datetime | None = None
+) -> UUID:
     result = LaunchRepository(session).launch_manual(
         ManualLaunch(requested_by="ops.alice", reason="CHG-1"),
         workflow_name="esl-refresh",
-        store_code="084",
+        store_code=store_code,
         mode=ExecutionMode.SHADOW,
         correlation_id=uuid4(),
         source_window_start=WINDOW.start,
         source_window_end=WINDOW.end,
         configuration_version_id=configuration_version_id,
         rule_version="compatibility-v1",
+        now=now,
     )
     assert result.execution is not None
     session.flush()
@@ -197,19 +200,19 @@ def test_a_retryable_source_failure_leaves_retry_wait_and_a_second_run_completes
 def test_runnable_executions_are_listed_oldest_first(
     session: Session, runner_parts: tuple[ExecutionRepository, WorkflowRunner, FakeSources], configuration_version_id: UUID
 ) -> None:
+    """Oldest by launch instant, not by insertion order or by id.
+
+    The later-inserted execution carries the earlier instant, so a listing
+    that followed insertion order, or a tie broken by random id, would fail.
+    """
+
     executions, _, _ = runner_parts
-    first = launch(session, configuration_version_id)
-    other = LaunchRepository(session).launch_manual(
-        ManualLaunch(requested_by="ops.alice", reason="CHG-2"),
-        workflow_name="esl-refresh", store_code="075", mode=ExecutionMode.SHADOW, correlation_id=uuid4(),
-        source_window_start=WINDOW.start, source_window_end=WINDOW.end,
-        configuration_version_id=configuration_version_id, rule_version="compatibility-v1",
-    )
-    assert other.execution is not None
+    later = launch(session, configuration_version_id, now=datetime(2026, 9, 2, 0, 0, 1, tzinfo=UTC))
+    earlier = launch(session, configuration_version_id, store_code="075", now=datetime(2026, 9, 2, 0, 0, 0, tzinfo=UTC))
 
     ids = executions.runnable_executions(limit=10)
 
-    assert ids == [first, other.execution.id]
+    assert ids == [earlier, later]
 
 
 def test_step_history_returns_the_latest_attempt_per_step_with_checkpoints(

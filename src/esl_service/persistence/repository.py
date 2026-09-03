@@ -58,8 +58,15 @@ class ExecutionRepository:
     def __init__(self, session: Session) -> None:
         self._session = session
 
-    def create_execution(self, request: NewExecution) -> WorkflowExecution:
-        """Create a QUEUED execution from its complete, reproducible input scope."""
+    def create_execution(
+        self, request: NewExecution, *, now: datetime | None = None
+    ) -> WorkflowExecution:
+        """Create a QUEUED execution from its complete, reproducible input scope.
+
+        ``started_at`` is the launch instant the caller already holds, so a
+        launch and its scope claim share one clock reading; the worker orders
+        runnable executions by it.
+        """
 
         execution = WorkflowExecution(
             workflow_name=request.workflow_name,
@@ -75,7 +82,7 @@ class ExecutionRepository:
             reason=request.reason,
             retry_of_execution_id=request.retry_of_execution_id,
             replay_of_execution_id=request.replay_of_execution_id,
-            started_at=datetime.now(UTC),
+            started_at=now or datetime.now(UTC),
             status=ExecutionStatus.QUEUED.value,
         )
         self._session.add(execution)
