@@ -11,7 +11,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 from uuid import UUID
 
-from sqlalchemy import CursorResult, select, update
+from sqlalchemy import CursorResult, or_, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session, selectinload
 
@@ -402,7 +402,7 @@ class ExecutionRepository:
         statement = (
             select(ExecutionStep)
             .where(ExecutionStep.execution_id == execution_id)
-            .order_by(ExecutionStep.started_at, ExecutionStep.attempt)
+            .order_by(ExecutionStep.sequence)
             .options(selectinload(ExecutionStep.checkpoints))
         )
         latest: dict[str, ExecutionStep] = {}
@@ -410,7 +410,7 @@ class ExecutionRepository:
             current = latest.get(step.step_name)
             if current is None or step.attempt > current.attempt:
                 latest[step.step_name] = step
-        return sorted(latest.values(), key=lambda step: (step.started_at, step.attempt))
+        return sorted(latest.values(), key=lambda step: step.sequence)
 
     def configuration_hash_of(self, configuration_version_id: UUID) -> str:
         """Return the content hash of one configuration version (#104 actions record it)."""
@@ -422,11 +422,13 @@ class ExecutionRepository:
             raise LookupError(f"no configuration version with id {configuration_version_id}")
         return version.content_hash
 
-    def runnable_executions(self, *, limit: int) -> list[UUID]:
-        """Return executions the worker may run now, oldest first.
+    def runnable_executions(self, *, limit: int, now: datetime) -> list[UUID]:
+        """Return executions the worker may run at ``now``, oldest first.
 
         QUEUED, RETRY_WAIT, and RECOVERING are runnable; RUNNING is not,
         because a live process owns it until ``recover_all`` says otherwise.
+        A RETRY_WAIT execution whose ``retry_not_before`` lies after ``now``
+        is not yet due (0008), so its bounded delay holds across a restart.
         """
 
         statement = (
@@ -438,7 +440,11 @@ class ExecutionRepository:
                         ExecutionStatus.RETRY_WAIT.value,
                         ExecutionStatus.RECOVERING.value,
                     ]
-                )
+                ),
+                or_(
+                    WorkflowExecution.retry_not_before.is_(None),
+                    WorkflowExecution.retry_not_before <= now,
+                ),
             )
             .order_by(WorkflowExecution.started_at, WorkflowExecution.id)
             .limit(limit)

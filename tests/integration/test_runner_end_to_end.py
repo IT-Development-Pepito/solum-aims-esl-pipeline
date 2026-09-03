@@ -161,7 +161,7 @@ def test_a_launched_execution_runs_to_succeeded_with_durable_steps_and_evidence(
     assert outcome.status is ExecutionStatus.SUCCEEDED_WITH_EXCEPTIONS  # SKU-2 was excluded (rejected > 0)
     assert execution.status == ExecutionStatus.SUCCEEDED_WITH_EXCEPTIONS.value
     assert execution.ended_at is not None
-    steps = session.scalars(select(ExecutionStep).where(ExecutionStep.execution_id == execution_id).order_by(ExecutionStep.started_at)).all()
+    steps = session.scalars(select(ExecutionStep).where(ExecutionStep.execution_id == execution_id).order_by(ExecutionStep.sequence)).all()
     assert [s.step_name for s in steps] == list(RUN_STEPS)
     assert {s.outcome for s in steps} == {"SUCCEEDED"}
     checkpoints = session.scalars(select(ExecutionCheckpoint).join(ExecutionStep).where(ExecutionStep.execution_id == execution_id)).all()
@@ -210,7 +210,7 @@ def test_runnable_executions_are_listed_oldest_first(
     later = launch(session, configuration_version_id, now=datetime(2026, 9, 2, 0, 0, 1, tzinfo=UTC))
     earlier = launch(session, configuration_version_id, store_code="075", now=datetime(2026, 9, 2, 0, 0, 0, tzinfo=UTC))
 
-    ids = executions.runnable_executions(limit=10)
+    ids = executions.runnable_executions(limit=10, now=datetime(2026, 9, 2, 0, 0, 2, tzinfo=UTC))
 
     assert ids == [earlier, later]
 

@@ -387,7 +387,7 @@ class RunnerPorts(TransactionalPorts):
 
     def runnable_executions(self, limit: int) -> Sequence[UUID]:
         with self._scope() as session:
-            return ExecutionRepository(session).runnable_executions(limit=limit)
+            return ExecutionRepository(session).runnable_executions(limit=limit, now=datetime.now(UTC))
 
     def persist(
         self,
