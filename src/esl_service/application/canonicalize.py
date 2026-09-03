@@ -19,7 +19,7 @@ runs over identical input compare byte for byte.
 
 from collections import defaultdict
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime, time
 from decimal import Decimal, InvalidOperation
 
@@ -233,7 +233,12 @@ def canonicalize_store(
             ),
             pricing=_pricing(selling_uom, regular_price, currency, calculation_version),
             inventory=InventoryState(
-                stock_on_hand=stock_on_hand(rows.stock, rows.offline_movements, rows.pos_offline_movements, item_code),
+                stock_on_hand=stock_on_hand(
+                    index.stock_by_item.get(item_code, ()),
+                    index.offline_by_item.get(item_code, ()),
+                    index.pos_by_item.get(item_code, ()),
+                    item_code,
+                ),
                 product_weight=None,
                 minimum_quantity=_quantity(mapping, "OID_REORDER_POINT"),
                 maximum_quantity=_quantity(mapping, "OID_MAX_STOCK"),
@@ -304,6 +309,20 @@ class _SourceIndex:
         for row in bundle.uom_mappings.mappings:
             if is_selling_barcode_mapping(row):
                 self.barcodes[_text(row.get("IUM_ITM_CD"))].append(_text(row.get("IUM_BAR_ITM_CD")))
+
+        # Stock rows indexed once per store. The first live run (store 084,
+        # 15,444 items against 88,485 rows) spent six minutes scanning every
+        # row per item; slicing here keeps the domain sum, `stock_on_hand`,
+        # unchanged and makes the step linear.
+        self.stock_by_item: dict[str, list[Row]] = defaultdict(list)
+        for row in rows.stock:
+            self.stock_by_item[_text(row.get("SM_ITM_CD"))].append(row)
+        self.offline_by_item: dict[str, list[Row]] = defaultdict(list)
+        for row in rows.offline_movements:
+            self.offline_by_item[_text(row.get("STR_ITM_CD"))].append(row)
+        self.pos_by_item: dict[str, list[Row]] = defaultdict(list)
+        for row in rows.pos_offline_movements:
+            self.pos_by_item[_text(row.get("STR_ITM_CD"))].append(row)
 
         self.active_mapping: dict[str, Row] = {}
         for row in bundle.warehouse.item_mappings:
@@ -378,11 +397,25 @@ def _evaluate_promotions(
     if not details:
         return None
 
-    evidence = []
+    # The procedure's SELECT DISTINCT: identical detail rows (VERIFIED, 1,098
+    # pairs in store 084) collapse into one candidate. Rows of one campaign
+    # that differ by UOM stay apart, each identified by its UOM.
+    unique: dict[tuple[str, str, str, str], Row] = {}
     for detail in sorted(details, key=lambda d: _text(d.get("CIGC_CD"))):
-        campaign_code = index.group_by_cigc.get(_text(detail.get("CIGC_CD")))
-        header = index.headers.get(campaign_code or "")
-        if campaign_code is None or header is None:
+        cigc = _text(detail.get("CIGC_CD"))
+        campaign_code = index.group_by_cigc.get(cigc)
+        if campaign_code is None:
+            continue
+        signature = (campaign_code, cigc, _text(detail.get("CIGD_UOM_CD")) or DEFAULT_CAMPAIGN_UOM, _text(detail.get("CIGD_STATUS")))
+        unique.setdefault(signature, detail)
+    uoms_per_campaign: dict[str, set[str]] = defaultdict(set)
+    for campaign_code, _, uom, _ in unique:
+        uoms_per_campaign[campaign_code].add(uom)
+
+    evidence = []
+    for (campaign_code, _, campaign_uom, _), detail in unique.items():
+        header = index.headers.get(campaign_code)
+        if header is None:
             continue
         if not is_active_campaign_header(header):
             issues.append(_campaign_issue(key, campaign_code, ISSUE_CAMPAIGN_HEADER_INACTIVE, {"CMP_STATUS": _text(header.get("CMP_STATUS"))}))
@@ -406,18 +439,20 @@ def _evaluate_promotions(
             end_date=_date(header.get("CMP_TO_DATE")),
             start_time=_time(header.get("CMP_FROM_TIME"), _DAY_START),
             end_time=_time(header.get("CMP_TO_TIME"), _DAY_END),
-            campaign_uom=_text(detail.get("CIGD_UOM_CD")) or DEFAULT_CAMPAIGN_UOM,
+            campaign_uom=campaign_uom,
             weekday=weekday_evidence_for(index.fact_by_campaign_item.get((campaign_code, key.item_code)), reference_time.date()),
         )
-        evidence.append(
-            evaluate_candidate(
-                key=key,
-                candidate=candidate,
-                now=reference_time,
-                regular_price=regular_price,
-                regular_price_ambiguous=ambiguous,
-            )
+        evaluated = evaluate_candidate(
+            key=key,
+            candidate=candidate,
+            now=reference_time,
+            regular_price=regular_price,
+            regular_price_ambiguous=ambiguous,
         )
+        if len(uoms_per_campaign[campaign_code]) > 1:
+            # Same campaign, another UOM: a distinct candidate, same source campaign.
+            evaluated = replace(evaluated, candidate_id=f"{campaign_code}/{campaign_uom}")
+        evidence.append(evaluated)
 
     evaluation = evaluate(key, rule_version, calculation_version, tuple(evidence))
     return select_compatibility_state(evaluation, existing_state=None)

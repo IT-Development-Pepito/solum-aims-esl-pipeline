@@ -427,3 +427,68 @@ def test_counts_balance_over_the_batch() -> None:
     assert counts.valid == 2
     assert counts.unresolved == 1  # SKU-3: ambiguous campaigns
     assert counts.valid == counts.eligible + counts.ineligible + counts.unresolved
+
+
+# --- defects found by the first live run (store 084, 2026-09-03) --------------------------
+
+
+def test_duplicate_campaign_detail_rows_collapse_into_one_candidate() -> None:
+    """VERIFIED: 1,098 of 17,991 campaign+item pairs in store 084 carry exact
+    duplicate CMP_ITEM_GRP_DTL rows. The procedure's SELECT DISTINCT collapses
+    them; the step raised "candidate identifiers must be unique" instead."""
+
+    campaigns = campaign("CMP-A", "SKU-1", value="10")
+    detail = campaigns["dbo.CMP_ITEM_GRP_DTL"][0]
+    campaigns["dbo.CMP_ITEM_GRP_DTL"] = (detail, dict(detail), dict(detail))
+
+    result = run(bundle(items=(item("SKU-1"),), prices=(price("SKU-1", "PCS", "10000"),), campaigns=campaigns))
+
+    (evaluation,) = result.evaluations
+    assert [c.candidate_id for c in evaluation.candidates] == ["CMP-A"]
+    assert evaluation.outcome is PromotionOutcome.SELECTED
+
+
+def test_one_campaign_with_two_uoms_for_an_item_keeps_both_candidates_apart() -> None:
+    campaigns = campaign("CMP-A", "SKU-1", value="10")
+    detail = campaigns["dbo.CMP_ITEM_GRP_DTL"][0]
+    campaigns["dbo.CMP_ITEM_GRP_DTL"] = (detail, {**detail, "CIGD_UOM_CD": "CTN"})
+
+    result = run(bundle(items=(item("SKU-1"),), prices=(price("SKU-1", "PCS", "10000"),), campaigns=campaigns))
+
+    (evaluation,) = result.evaluations
+    assert sorted(c.candidate_id for c in evaluation.candidates) == ["CMP-A/CLR", "CMP-A/CTN"]
+    assert {c.source_campaign_id for c in evaluation.candidates} == {"CMP-A"}
+
+
+def test_a_store_sized_batch_canonicalizes_in_seconds_not_minutes() -> None:
+    """The first live run spent six minutes in this step: stock was summed by
+    scanning every stock and movement row once per item (15,444 items against
+    88,485 rows). Indexing once per store must make this linear."""
+
+    import time
+
+    items = tuple(item(f"SKU-{n:05d}") for n in range(6000))
+    prices = tuple(price(f"SKU-{n:05d}", "PCS", "1000") for n in range(6000))
+    stock = tuple(
+        {"SM_ITM_CD": f"SKU-{n % 6000:05d}", "SM_LOC_CD": "001", "SM_CURR_STK_QTY": Decimal(1), "SM_CONSIGN_STK_QTY": None}
+        for n in range(12000)
+    )
+    pos = tuple(
+        {"STR_ITM_CD": f"SKU-{n % 6000:05d}", "LOC_CD": "001", "DBL_QTY": Decimal(-1), "STOCK_UPDATED_FLAG": None}
+        for n in range(48000)
+    )
+    store_rows = merge({"dbo.ITEM_MST": items, "dbo.BASIC_SP_MST": prices, "dbo.STOCK_MASTER": stock, "dbo.POS_OFFLINE_TEMP_ITEM_MOVEMENT": pos})
+    source = StoreSourceBundle(
+        store=STORE,
+        warehouse=WarehouseReadResult((), (), provenance("sql.internal", "DBWH_8555", ("dbo.DimItemMapping", "dbo.FactCampaign"))),
+        store_rows=StoreReadResult.from_mapping(store_rows, provenance("10.0.0.84", "PEPITO_084", STORE_OBJECTS)),
+        uom_mappings=UomMappingReadResult((), provenance("192.168.85.18", "PEPITO_HO", ("dbo.ITEM_UOM_MAPPING_MST",))),
+    )
+
+    started = time.perf_counter()
+    result = run(source)
+    elapsed = time.perf_counter() - started
+
+    assert len(result.records) == 6000
+    assert result.records[0].inventory.stock_on_hand == Decimal(2) - Decimal(8)
+    assert elapsed < 5.0, f"took {elapsed:.1f}s"
