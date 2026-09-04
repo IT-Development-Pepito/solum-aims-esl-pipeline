@@ -21,6 +21,10 @@ from esl_service.web.auth import BearerTokenAuthenticator, tokens_from_bundle
 
 runner = CliRunner()
 
+# GET /runs refuses an unbounded query (422) before any role check, so every
+# call here carries the same bounded one; what varies is only the credential.
+QUERY = {"store_code": "084"}
+
 
 class Base64Codec:
     """The bundle codec the other CLI tests use; DPAPI is Windows-only."""
@@ -103,3 +107,47 @@ def test_two_accounts_get_distinct_tokens_that_resolve_separately(bundle: Path) 
 
     assert alice != bob
     assert tokens == {"ops.alice": alice, "ops.bob": bob}
+
+
+def test_an_issued_token_is_accepted_by_the_api(bundle: Path) -> None:
+    """The criterion #98 was written for: a real request, not just a lookup.
+
+    Everything between the command and the route is exercised here -- the
+    bundle on disk, ``tokens_from_bundle``, the authenticator, the app factory,
+    and the dependency that turns a header into a principal -- because each of
+    those is a place a token can be stored correctly and still be refused.
+    """
+
+    from tests.unit.web.test_routes import build
+
+    token = issue(bundle)
+    client = build(authenticator=authenticator(bundle)).client
+
+    unauthenticated = client.get("/runs", params=QUERY)
+    authenticated = client.get(
+        "/runs", params=QUERY, headers={"Authorization": f"Bearer {token}"}
+    )
+
+    assert unauthenticated.status_code == 401
+    assert authenticated.status_code == 200
+
+
+def test_a_rotated_token_is_refused_by_the_api(bundle: Path) -> None:
+    """Rotation has to reach the surface the token is used on."""
+
+    from tests.unit.web.test_routes import build
+
+    superseded = issue(bundle)
+    current = issue(bundle)
+    client = build(authenticator=authenticator(bundle)).client
+
+    current_call = client.get(
+        "/runs", params=QUERY, headers={"Authorization": f"Bearer {current}"}
+    )
+    refused = client.get(
+        "/runs", params=QUERY, headers={"Authorization": f"Bearer {superseded}"}
+    )
+
+    assert current_call.status_code == 200
+    assert refused.status_code == 401
+    assert superseded not in refused.text

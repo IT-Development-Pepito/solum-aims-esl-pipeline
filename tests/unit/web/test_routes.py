@@ -218,7 +218,10 @@ class Harness:
     client: TestClient
 
 
-def build(probe: HealthyProbe | None = None) -> Harness:
+def build(
+    probe: HealthyProbe | None = None,
+    authenticator: BearerTokenAuthenticator | None = None,
+) -> Harness:
     repositories = FakeRepositories()
     operations = AuthorizedOperations(
         launches=repositories,
@@ -239,7 +242,7 @@ def build(probe: HealthyProbe | None = None) -> Harness:
         NoLaunches(),
         LaunchContext(ExecutionMode.SHADOW, CONFIGURATION_VERSION_ID, "compatibility-v1"),
     )
-    authenticator = BearerTokenAuthenticator(
+    authenticator = authenticator or BearerTokenAuthenticator(
         tokens={"pepito": "tok-admin", "budi": "tok-op", "guest": "tok-guest"},
         assignments={"pepito": frozenset({Role.ADMIN}), "budi": frozenset({Role.OPERATOR})},
     )
