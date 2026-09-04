@@ -20,8 +20,8 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     env:
-      ESL_DATABASE_URL: postgresql+psycopg://esl_ci@localhost:5432/esl_ci
-      ESL_TEST_DATABASE_URL: postgresql+psycopg://esl_ci@localhost:5432/esl_ci
+      ESL_DATABASE_URL: postgresql+psycopg://esl_ci:${{ github.run_id }}@localhost:5432/esl_ci
+      ESL_TEST_DATABASE_URL: postgresql+psycopg://esl_ci:${{ github.run_id }}@localhost:5432/esl_ci
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

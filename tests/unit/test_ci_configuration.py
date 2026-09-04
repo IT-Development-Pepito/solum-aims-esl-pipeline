@@ -20,8 +20,8 @@ def test_database_verify_job_is_self_contained_and_exercises_state_integration()
     assert "runs-on: ubuntu-latest" in database_job
     assert "image: postgres:16" in database_job
     assert "POSTGRES_HOST_AUTH_METHOD: trust" in database_job
-    assert "ESL_DATABASE_URL: postgresql+psycopg://esl_ci@localhost:5432/esl_ci" in database_job
-    assert "ESL_TEST_DATABASE_URL: postgresql+psycopg://esl_ci@localhost:5432/esl_ci" in database_job
+    assert "ESL_DATABASE_URL: postgresql+psycopg://esl_ci:${{ github.run_id }}@localhost:5432/esl_ci" in database_job
+    assert "ESL_TEST_DATABASE_URL: postgresql+psycopg://esl_ci:${{ github.run_id }}@localhost:5432/esl_ci" in database_job
     assert "python -m alembic upgrade head" in database_job
     assert "python -m pytest -v tests/integration tests/unit/persistence/test_migration_graph.py" in database_job
     assert "POSTGRES_PASSWORD" not in database_job
