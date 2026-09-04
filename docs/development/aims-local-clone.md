@@ -15,7 +15,7 @@ Read the whole document before starting. Two of the failures below look like dif
 
 - The local PostgreSQL 18 client tools, which are not on `PATH` by default:
   `C:\Program Files\PostgreSQL\18\bin`. `pg_dump` can read a server older than itself but refuses one newer, so check `SELECT version();` on AIMS if a version error appears.
-- A read-only account on production AIMS with `SELECT` on every table in `public`.
+- A read-only account on production AIMS with `SELECT` on every table in `public`. **VERIFIED 2026-09-04:** the `readonly` account holds CONNECT and schema `USAGE` but not `SELECT` on `public.enddevice`, so check the grant before attempting a refresh; the #24 reader cannot run against production until it exists.
 - A local `postgres` superuser for the restore.
 
 Set these once per session in PowerShell:
@@ -24,7 +24,9 @@ Set these once per session in PowerShell:
 $PG    = "C:\Program Files\PostgreSQL\18\bin"
 $OUT   = "D:\Downloads"
 $AHOST = "<aims host>"
-$AUSER = "<read-only user>"
+$APORT = "9010"                # VERIFIED 2026-09-04: production listens here, not 5432
+$AUSER = "<read-only user>"    # production uses `readonly`; `esl_aims_reader` is the role
+                               # this procedure creates locally, and they are not the same
 ```
 
 ## 1. Dump, complete
@@ -32,11 +34,11 @@ $AUSER = "<read-only user>"
 Dump each database with **no restricting flag**. Without `--data-only`, `--schema-only`, `--section`, `--no-owner`, or `--no-privileges`, `pg_dump` includes tables, columns, indexes, constraints, sequences, views, functions, triggers, comments, ownership, privileges, and large objects. Ownership and privileges are dropped at restore time instead, so the archive stays a faithful copy.
 
 ```powershell
-& "$PG\pg_dump.exe" --host=$AHOST --port=5432 --username=$AUSER `
+& "$PG\pg_dump.exe" --host=$AHOST --port=$APORT --username=$AUSER `
   --dbname=AIMS_PORTAL_DB --format=custom --encoding=UTF8 `
   --quote-all-identifiers --verbose --file="$OUT\AIMS_PORTAL_DB.dump"
 
-& "$PG\pg_dump.exe" --host=$AHOST --port=5432 --username=$AUSER `
+& "$PG\pg_dump.exe" --host=$AHOST --port=$APORT --username=$AUSER `
   --dbname=AIMS_CORE_DB --format=custom --encoding=UTF8 `
   --quote-all-identifiers --verbose --file="$OUT\AIMS_CORE_DB.dump"
 ```
