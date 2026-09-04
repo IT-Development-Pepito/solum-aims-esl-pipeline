@@ -16,6 +16,7 @@ bundle, ACL, or database.
 """
 
 import os
+import secrets as secrets_module
 import sys
 from collections.abc import Callable
 from enum import StrEnum
@@ -26,6 +27,7 @@ import typer
 from pydantic import ValidationError
 
 from esl_service.config import Settings
+from esl_service.domain.authorization import parse_role_assignments
 from esl_service.runtime import cli_operations
 from esl_service.runtime.connectivity import (
     ConnectionTarget,
@@ -54,6 +56,7 @@ from esl_service.runtime.secrets import (
     SecretUnavailableError,
     WindowsFileProtector,
 )
+from esl_service.web.auth import API_TOKEN_PREFIX
 
 app = typer.Typer(no_args_is_help=True, add_completion=False, help=__doc__)
 secrets_app = typer.Typer(no_args_is_help=True, help="Provision the DPAPI secret bundle.")
@@ -352,6 +355,113 @@ def secrets_set(
     typer.echo(f"Stored secret '{name}' in {path}.")
     _audit_or_warn(
         action="secret.set", reason=reason, name=name, settings=settings, bundle=path
+    )
+
+
+@secrets_app.command("issue-token")
+def secrets_issue_token(
+    account: Annotated[str, typer.Argument(help="Account the token authenticates, e.g. ops.alice.")],
+    reason: ReasonOption,
+    bundle: BundleOption = None,
+    out: Annotated[
+        Path | None,
+        typer.Option("--out", help="Write the token to this file, protected by the bundle's ACL."),
+    ] = None,
+    stdout: Annotated[
+        bool, typer.Option("--stdout", help="Print the token to standard output instead.")
+    ] = False,
+) -> None:
+    """Generate, store, and reveal one API token; run again to rotate it (#98).
+
+    The value is generated here rather than pasted, so a scripted environment
+    setup never carries a secret through a clipboard or a half-typed prompt.
+    It is revealed exactly once, through the one channel the caller names, and
+    it never reaches the audit entry or any log.
+    """
+
+    if bool(out) == stdout:
+        typer.echo("Refused: name exactly one reveal channel, --out <path> or --stdout.")
+        raise typer.Exit(code=2)
+
+    settings = _load_settings()
+    sid = _guard_identity(settings)
+    name = f"{API_TOKEN_PREFIX}{account}"
+    if out is not None and out.exists():
+        # Never overwrite: the existing file may hold a token still in use.
+        typer.echo(f"Refused: {out} exists. Remove it first, or name another path.")
+        raise typer.Exit(code=1)
+
+    token = secrets_module.token_urlsafe(32)
+    path = _bundle_path(bundle, settings)
+    _ensure_bundle_directory(path, sid)
+    store = _store(path, sid)
+    try:
+        # keys() is the store's own listing, not a mapping view.
+        existing = store.keys()
+    except SecretUnavailableError:
+        existing = ()
+    rotated = name in existing
+    try:
+        store.set(name, token)
+    except InvalidSecretName:
+        typer.echo(
+            f"Refused: '{account}' is not a usable account name; it must be letters, "
+            "digits, dots, dashes, or underscores."
+        )
+        raise typer.Exit(code=1) from None
+    except SecretUnavailableError:
+        typer.echo("Refused: the existing secret bundle is unavailable and will not be overwritten.")
+        raise typer.Exit(code=1) from None
+    except OSError:
+        _refuse_filesystem(path)
+
+    if out is not None:
+        try:
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text(token + "\n", encoding="utf-8")
+            _protector().protect(out, sid)
+        except OSError:
+            _refuse_filesystem(out)
+        typer.echo(f"Issued a token for '{account}' and wrote it to {out}.")
+    else:
+        typer.echo(f"Issued a token for '{account}'. It is shown once and not stored elsewhere:")
+        typer.echo(token)
+
+    _warn_when_account_has_no_role(account, settings)
+    _audit_or_warn(
+        action="secret.set", reason=reason, name=name, settings=settings, bundle=path
+    )
+    if rotated:
+        typer.echo(
+            f"The previous token for '{account}' no longer authenticates. Restart the "
+            "service so it reloads the bundle."
+        )
+
+
+def _warn_when_account_has_no_role(account: str, settings: Settings | None) -> None:
+    """A token that authenticates and is then refused is a support call, not a setup.
+
+    The assignment text is read from settings when they load, and from the
+    environment when they do not: on a development machine the rest of the
+    configuration is often absent, and the warning is still worth having.
+    """
+
+    configured = (
+        settings.operator_roles
+        if settings is not None
+        else os.environ.get("ESL_OPERATOR_ROLES", "")
+    )
+    try:
+        assignments = parse_role_assignments(configured)
+    except ValueError:
+        # Malformed assignments stop the service at startup; that is where the
+        # operator should see it, not here.
+        return
+    if account in assignments:
+        return
+    typer.echo(
+        f"Warning: '{account}' holds no role in ESL_OPERATOR_ROLES, so this token will "
+        "authenticate and then be refused. Assign a role before the account is used."
     )
 
 
