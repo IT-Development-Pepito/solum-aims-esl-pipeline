@@ -409,7 +409,7 @@ No microservice split, container platform, broker, or distributed workflow engin
 
 ## 9. Security architecture
 
-Trust boundaries are SQL Server, AIMS API, optional read-only AIMS PostgreSQL, filesystem consumer, secrets platform, and monitoring platform. Each receives a separate identity and least privilege. The compatibility identity may SELECT only the explicitly approved views/tables and must lack write/DDL privileges. Target AIMS mutations require approved API authentication, TLS where supported, request/response audit, and allowlisted network routes. Credentials, encrypted blobs, and host-specific production configuration are never copied into documentation or source control.
+Trust boundaries are SQL Server, AIMS API, optional read-only AIMS PostgreSQL, filesystem consumer, secrets platform, and monitoring platform. Each receives a separate identity and least privilege. The compatibility identity may SELECT only the explicitly approved views/tables and must lack write/DDL privileges. Target AIMS mutations require approved API authentication, TLS where supported, request/response audit, and allowlisted network routes; AD-021 records that the deployed Dashboard's page-change operation declares no authentication scheme at all, so authentication and TLS are adopted when the vendor supports them while the audit and allowlist requirements apply in full today. Credentials, encrypted blobs, and host-specific production configuration are never copied into documentation or source control.
 
 ## 10. Architectural decisions
 
