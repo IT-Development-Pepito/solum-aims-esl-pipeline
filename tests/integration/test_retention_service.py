@@ -351,7 +351,6 @@ def test_purge_retains_the_audit_core(
 
     assert session.get(WorkflowExecution, populated.execution_id) is not None
     assert _count(session, ReconciliationReport) == 1
-    assert _count(session, RecordProcessingResult) == 1
 
 
 def test_purge_records_its_own_audit_entry(
@@ -432,3 +431,116 @@ def _count(session: Session, model: type) -> int:
     """Return how many rows of one model remain."""
 
     return int(session.scalars(select(func.count()).select_from(model)).one())
+
+
+# --- the two links #64 relaxes ---------------------------------------------------
+
+
+def test_purge_removes_the_rows_the_audit_core_used_to_pin(
+    session: Session, populated: Fixture
+) -> None:
+    """#64: canonical snapshots are the largest class, and #62 could not reach them."""
+
+    from esl_service.persistence.models import CanonicalRecordSnapshot, SnapshotSet
+
+    assert _count(session, RecordProcessingResult) == 1
+    assert _count(session, CanonicalRecordSnapshot) == 1
+    assert _count(session, SnapshotSet) == 1
+
+    outcome = service(session).purge_execution(
+        populated.execution_id, now=NOW, actor="operator@example", reason="INC-1"
+    )
+    session.flush()
+
+    assert _count(session, RecordProcessingResult) == 0
+    assert _count(session, CanonicalRecordSnapshot) == 0
+    assert _count(session, SnapshotSet) == 0
+    deleted = dict(outcome.deleted)
+    assert deleted["record_processing_result"] == 1
+    assert deleted["canonical_record_snapshot"] == 1
+    assert deleted["snapshot_set"] == 1
+
+
+def test_a_purged_action_keeps_its_business_key_with_the_detail_link_nulled(
+    session: Session, action_repository: ActionRepository, populated: Fixture
+) -> None:
+    """The action stays interpretable without the row it pointed at (#64)."""
+
+    action = action_repository.create_intended(
+        NewRecordAction(
+            execution_id=populated.execution_id,
+            record_processing_result_id=populated.result_id,
+            key=KEY,
+            label_code="LBL-0001",
+            action_type="PAGE_CHANGE",
+            desired_page=2,
+            desired_state="PAGE_2",
+            mode=ExecutionMode.ACTIVE,
+            contract_version="aims-page-v1",
+            rule_version="rules-v1",
+            configuration_hash="a" * 64,
+            source_window_start=NOW - timedelta(days=121),
+            source_window_end=NOW - timedelta(days=121),
+        )
+    )
+    action_repository.transition(action.id, ActionState.SUBMITTING)
+    action_repository.transition(
+        action.id, ActionState.ACKNOWLEDGED, acknowledgement_batch_id="batch-1"
+    )
+    session.flush()
+    key_before = action.idempotency_key
+
+    service(session).purge_execution(
+        populated.execution_id, now=NOW, actor="operator@example", reason="INC-1"
+    )
+    session.flush()
+    session.expire_all()
+
+    stored = session.get_one(RecordAction, action.id)
+    assert stored.record_processing_result_id is None
+    assert stored.idempotency_key == key_before
+    assert (stored.store_code, stored.item_code, stored.selling_uom) == (KEY.store_code, KEY.item_code, KEY.selling_uom)
+    assert (stored.state, stored.desired_state) == ("ACKNOWLEDGED", "PAGE_2")
+    assert stored.acknowledgement_batch_id == "batch-1"
+    assert len(stored.attempts) >= 0  # attempts are audit core and are never touched
+
+
+def test_a_reconciliation_exception_survives_with_its_detail_link_released(
+    session: Session, populated: Fixture
+) -> None:
+    """The exception is audit core, but it also pinned the detailed row (#64).
+
+    Its link was already nullable, so only the purge changes, not the schema.
+    """
+
+    from esl_service.persistence.models import ReconciliationException
+    from esl_service.persistence.reconciliation_repository import (
+        ReconciliationRepository,
+    )
+
+    report = ReconciliationRepository(session).latest_report(populated.execution_id)
+    assert report is not None
+    exception = ReconciliationRepository(session).append_exception(
+        report.id,
+        category="LEGACY_BASELINE_MISMATCH",
+        store_code=KEY.store_code,
+        item_code=KEY.item_code,
+        selling_uom=KEY.selling_uom,
+        expected_evidence={"source_regular_price": "50000"},
+        actual_evidence={"SALES_PRICE": "49000"},
+        record_processing_result_id=populated.result_id,
+    )
+    session.flush()
+
+    service(session).purge_execution(
+        populated.execution_id, now=NOW, actor="operator@example", reason="INC-1"
+    )
+    session.flush()
+    session.expire_all()
+
+    stored = session.get_one(ReconciliationException, exception.id)
+    assert stored.record_processing_result_id is None
+    assert stored.category == "LEGACY_BASELINE_MISMATCH"
+    assert stored.expected_evidence == {"source_regular_price": "50000"}
+    assert stored.actual_evidence == {"SALES_PRICE": "49000"}
+    assert (stored.store_code, stored.item_code) == (KEY.store_code, KEY.item_code)

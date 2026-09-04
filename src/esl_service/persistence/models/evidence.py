@@ -251,10 +251,11 @@ class PromotionEvaluation(Base):
     id: Mapped[UUID] = mapped_column(
         PostgreSQLUUID(as_uuid=True), primary_key=True, default=uuid4
     )
-    canonical_record_snapshot_id: Mapped[UUID] = mapped_column(
+    # Optional since 0009 (#64), for the same reason as the action link above.
+    canonical_record_snapshot_id: Mapped[UUID | None] = mapped_column(
         PostgreSQLUUID(as_uuid=True),
         ForeignKey("canonical_record_snapshot.id", ondelete="RESTRICT"),
-        nullable=False,
+        nullable=True,
     )
     rule_version: Mapped[str] = mapped_column(String(50), nullable=False)
     calculation_version: Mapped[str] = mapped_column(String(50), nullable=False)
