@@ -460,6 +460,12 @@ class Settings(BaseSettings):
     worker_concurrency: int = Field(default=1, ge=1, le=8)
     aims_host: str = ""
     aims_port: int = 5432
+    # How long the AIMS compatibility reader (#24) waits for a connection
+    # before the fault is classified UNAVAILABLE and retried (#112). Some
+    # hosts drop rather than refuse a closed port, and without this bound
+    # psycopg waited past 40 s per attempt. Provisional (NFR-004); the SQL
+    # Server helpers use the same 10 s.
+    aims_connect_timeout_seconds: int = Field(default=10, ge=1, le=300)
     aims_portal_database: str = ""
     aims_portal_username: str = ""
     aims_core_database: str = ""
