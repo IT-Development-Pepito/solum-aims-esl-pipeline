@@ -49,3 +49,20 @@ def test_metrics_use_a_bounded_configurable_recent_run_window() -> None:
 def test_metrics_run_limit_must_be_positive() -> None:
     with pytest.raises(ValidationError):
         Settings.model_validate({**BASE, "metrics_run_limit": 0})
+
+
+def test_the_aims_connect_timeout_is_bounded_and_in_the_snapshot() -> None:
+    """#112: a silently dropped connection must fail fast into the #20 retry policy."""
+
+    settings = Settings.model_validate(BASE)
+    configured = Settings.model_validate({**BASE, "aims_connect_timeout_seconds": 3})
+
+    assert settings.aims_connect_timeout_seconds == 10
+    assert configured.aims_connect_timeout_seconds == 3
+    assert sanitized_configuration_snapshot(configured)["aims_connect_timeout_seconds"] == 3
+
+
+@pytest.mark.parametrize("seconds", [0, 301])
+def test_an_unusable_aims_connect_timeout_is_refused(seconds: int) -> None:
+    with pytest.raises(ValidationError):
+        Settings.model_validate({**BASE, "aims_connect_timeout_seconds": seconds})

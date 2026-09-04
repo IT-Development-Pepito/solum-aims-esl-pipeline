@@ -274,19 +274,31 @@ class AuditedReadSink:
 # --- the reader -----------------------------------------------------------------
 
 
-def create_read_only_engine(url: URL) -> Engine:
+#: Matches ``Settings.aims_connect_timeout_seconds``; tests build engines directly.
+DEFAULT_CONNECT_TIMEOUT_SECONDS = 10
+
+
+def create_read_only_engine(
+    url: URL, *, connect_timeout_seconds: int = DEFAULT_CONNECT_TIMEOUT_SECONDS
+) -> Engine:
     """An engine whose every session is read-only at the server, not by policy.
 
     ``default_transaction_read_only=on`` makes PostgreSQL refuse a write before
     it consults the role's grants, so the least-privilege identity is a second
-    line rather than the only one.
+    line rather than the only one. The connect timeout (#112) travels as a
+    driver argument, never in the URL, so a logged URL cannot carry it and a
+    host that drops packets fails fast into the retry policy instead of
+    stalling until TCP gives up.
     """
 
-    return create_engine(
-        url,
-        connect_args={"options": "-c default_transaction_read_only=on"},
-        pool_pre_ping=True,
-    )
+    if connect_timeout_seconds < 1:
+        raise ValueError("connect_timeout_seconds must be at least one second")
+    connect_args: dict[str, object] = {"options": "-c default_transaction_read_only=on"}
+    # SQLAlchemy merges connect_args over URL query parameters, so a timeout an
+    # operator or a test put in the URL must not be silently replaced.
+    if "connect_timeout" not in url.query:
+        connect_args["connect_timeout"] = connect_timeout_seconds
+    return create_engine(url, connect_args=connect_args, pool_pre_ping=True)
 
 
 class AimsCompatibilityReader:
@@ -320,7 +332,10 @@ class AimsCompatibilityReader:
             if not target.configured():
                 raise ValueError(f"AIMS target {name!r} is not configured")
             engines.append(
-                create_read_only_engine(target.sqlalchemy_url(secrets.get(target.password_key)))
+                create_read_only_engine(
+                    target.sqlalchemy_url(secrets.get(target.password_key)),
+                    connect_timeout_seconds=settings.aims_connect_timeout_seconds,
+                )
             )
         return cls(engines[0], engines[1], sink=sink)
 

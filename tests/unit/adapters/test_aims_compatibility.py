@@ -9,6 +9,7 @@ the least-privilege proof are integration tests against the local clone.
 
 import inspect
 import socket
+import time
 from typing import Self
 
 import pytest
@@ -317,3 +318,83 @@ def test_a_driver_error_while_reading_core_devices_is_classified() -> None:
 
     assert error.value.relation == "enddevice"
     assert "hunter2" not in str(error.value)
+
+
+def test_the_engine_gives_the_driver_the_connect_timeout_without_touching_the_url() -> None:
+    """#112: a host that drops packets must not stall the probe until TCP gives up.
+
+    The port below was bound and released, so on this host the connect is
+    dropped rather than refused; without a timeout psycopg waits well past 40 s.
+    The timeout travels as a connect argument, never in the URL a log could show.
+    """
+
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    url = make_url(f"postgresql+psycopg://reader:hunter2@127.0.0.1:{port}/AIMS")
+    dead = create_read_only_engine(url, connect_timeout_seconds=2)
+    started = time.perf_counter()
+    try:
+        with pytest.raises(AimsUnavailable):
+            AimsCompatibilityReader(dead, dead).fetch_labels("084")
+    finally:
+        dead.dispose()
+
+    assert time.perf_counter() - started < 10
+    assert "connect_timeout" not in str(dead.url)
+
+
+def test_from_settings_hands_the_configured_connect_timeout_to_both_engines(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from esl_service import config
+    from esl_service.adapters import aims_compatibility as module
+
+    settings = config.Settings.model_validate(
+        {
+            "environment": "development",
+            "database_url": "postgresql+psycopg://esl@localhost:5432/esl_pipeline_dev",
+            "internal_host": "127.0.0.1",
+            "aims_host": "127.0.0.1",
+            "aims_portal_database": "AIMS_PORTAL_DB",
+            "aims_portal_username": "reader",
+            "aims_core_database": "AIMS_CORE_DB",
+            "aims_core_username": "reader",
+            "aims_connect_timeout_seconds": 4,
+        }
+    )
+    seen: list[int] = []
+
+    def fake_engine(url: object, *, connect_timeout_seconds: int) -> object:
+        seen.append(connect_timeout_seconds)
+        return object()
+
+    monkeypatch.setattr(module, "create_read_only_engine", fake_engine)
+
+    class Secrets:
+        def get(self, name: str) -> str:
+            return "pw"
+
+    module.AimsCompatibilityReader.from_settings(settings, Secrets())
+
+    assert seen == [4, 4]
+
+
+def test_a_connect_timeout_already_in_the_url_is_not_overridden_by_the_default() -> None:
+    """SQLAlchemy merges connect_args over URL query parameters, so the engine
+    must leave the driver argument out when the URL already names one; otherwise
+    every existing test URL with ``connect_timeout=2`` silently waited 10 s."""
+
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    url = make_url(f"postgresql+psycopg://reader:hunter2@127.0.0.1:{port}/AIMS?connect_timeout=1")
+    dead = create_read_only_engine(url)  # default 10 s must not win over the URL's 1 s
+    started = time.perf_counter()
+    try:
+        with pytest.raises(AimsUnavailable):
+            AimsCompatibilityReader(dead, dead).fetch_labels("084")
+    finally:
+        dead.dispose()
+
+    assert time.perf_counter() - started < 5

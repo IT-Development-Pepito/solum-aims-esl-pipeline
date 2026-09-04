@@ -258,6 +258,7 @@ Stored secret 'state.password' in C:\ProgramData\SOLUM\ESL\secrets.dpapi.
 1. Run **`esl-admin check-connections`**. It probes the state store from configuration and any extra target given as `--target name=postgresql://user@host:port/db#bundle.key` or `--target name=sqlserver://user@host/db#bundle.key`. The part after `#` is a bundle key, never a password; an inline password is rejected.
 2. Read the outcome per target: `REACHABLE` with the identity the server reports; `UNREACHABLE` means no answer from the host, port, or database; `CREDENTIAL_REJECTED` means the server answered and refused the credential; `SECRET_UNAVAILABLE` means the key is not in the bundle; `UNCONFIGURED` means the target has no host, database, or username yet and is not counted as a failure.
 3. The exit code is non-zero when any target is neither `REACHABLE` nor `UNCONFIGURED`, so the check can run unattended. Output never contains a connection string or a password; driver error text is dropped because it commonly embeds both.
+4. The AIMS compatibility reader waits at most `ESL_AIMS_CONNECT_TIMEOUT_SECONDS` (10 by default; #112) for a connection to either AIMS database, then classifies the fault `UNAVAILABLE` and hands it to the retry policy; a host that silently drops packets no longer stalls an attempt until TCP gives up. The value is a provisional operational default (NFR-004): raise it only against a measured connection-latency baseline, never to paper over an unreachable host.
 
 ### Provision an API token
 

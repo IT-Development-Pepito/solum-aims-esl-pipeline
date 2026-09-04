@@ -12,6 +12,7 @@ page, that a write is refused, and that every read leaves audit evidence.
 
 import os
 import socket
+import time
 from collections.abc import Iterator
 
 import pytest
@@ -223,3 +224,23 @@ def test_every_read_appends_an_audit_entry_with_counts_and_no_location(
     assert entry.after_evidence["store_code"] == "084"
     assert "unassigned" in entry.after_evidence
     assert "://" not in str(entry.after_evidence)
+
+
+def test_the_configured_connect_timeout_bounds_a_silent_clone_port(core_engine: Engine) -> None:
+    """#112: the same silent port as above, but the bound comes from the engine, not the URL."""
+
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    silent_url = make_url(_clone_url("ESL_TEST_AIMS_PORTAL_URL")).set(port=port)
+    assert "connect_timeout" not in silent_url.query
+    silent_portal = create_read_only_engine(silent_url, connect_timeout_seconds=2)
+    started = time.perf_counter()
+    try:
+        with pytest.raises(AimsUnavailable) as error:
+            AimsCompatibilityReader(silent_portal, core_engine).fetch_labels("084")
+    finally:
+        silent_portal.dispose()
+
+    assert time.perf_counter() - started < 10
+    assert error.value.signal.kind is FailureKind.UNAVAILABLE
