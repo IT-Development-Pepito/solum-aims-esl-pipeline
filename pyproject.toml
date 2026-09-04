@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "solum-aims-esl-service"
 version = "0.1.0"
 requires-python = ">=3.12"
-dependencies = ["fastapi", "uvicorn[standard]", "sqlalchemy", "alembic", "pydantic-settings", "psycopg[binary]", "pyodbc", "httpx", "typer", "structlog", "pywin32", "prometheus-client"]
+dependencies = ["fastapi", "uvicorn[standard]", "sqlalchemy", "alembic", "pydantic-settings", "psycopg[binary]", "pyodbc", "httpx", "typer", "structlog", "pywin32; sys_platform == \"win32\"", "prometheus-client"]
 
 [project.optional-dependencies]
 dev = ["pytest", "ruff", "mypy", "respx"]
