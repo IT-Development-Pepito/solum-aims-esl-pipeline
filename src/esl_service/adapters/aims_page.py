@@ -2,14 +2,19 @@
 
 The contract of record is the deployed Dashboard operation
 ``POST /dashboardservice/common/labels/page?store=<code>`` carrying a
-``pageChangeList`` of ``labelCode``/``page`` entries. Its request shape is
-evidenced directly by the three Hop ``.hpl`` REST steps that have posted to
-it in production every 30 minutes and by the runbook section 13.6; its
-response fields ``responseCode``, ``responseMessage``, and ``customBatchId``
-are the VERIFIED reading of the deployed OpenAPI recorded in
-``docs/SPECIFICATION.md``. That last reading is a transcription rather than
-a captured artifact, so the parser treats ``customBatchId`` as optional and
-turns an unreadable body into a classified outcome rather than an exception.
+``pageChangeList`` of ``labelCode``/``page`` entries. The document itself is
+now captured at ``docs/hop-jenkins-pipeline/AIMS-Dashboard-OpenAPI-common.json``
+and the contract test reads it, so this adapter cannot drift from it silently.
+
+The document decides the outcome, and it is deliberately thin: it names
+``200 OK``, ``402 License is expired``, ``405 Parameter is invalid``, and
+``500``, and its ``AimsApiResponse`` marks *no* field required. There is
+therefore no documented vocabulary of success or failure values for
+``responseCode``. This adapter does not invent one. HTTP status decides, and
+``responseCode``, ``responseMessage``, and ``customBatchId`` are recorded as
+receipt evidence for the operator. Were the vendor ever to answer 200 while
+declining in the body, the #24 read model and #25 reconciliation are what
+catch it, not a guess made here.
 
 AD-021 accepts that the vendor declares no authentication scheme and that
 the current pipeline already posts to this endpoint unauthenticated. What
@@ -53,8 +58,10 @@ PAGE_CHANGE_PATH = "/common/labels/page"
 #: to a page is idempotent in effect, and the action ledger is authoritative.
 IDEMPOTENCY_HEADER = "Idempotency-Key"
 
-#: Vendor response codes that mean the batch was accepted.
-_ACCEPTED_CODES = frozenset({"200", "0", "00", "SUCCESS", "OK"})
+#: Documented refusals of the operation of record. Both need a human, so
+#: neither is ever retried.
+_LICENSE_EXPIRED = 402
+_INVALID_PARAMETER = 405
 
 
 class PageChangeRequestError(ValueError):
@@ -139,35 +146,40 @@ class AimsPageClientHttp:
 def _read(response: httpx.Response) -> PageChangeOutcome:
     """Turn one answered request into a classified outcome."""
 
-    if response.status_code in (502, 503, 504):
+    status = response.status_code
+    if status in (502, 503, 504):
         # A gateway refused or could not reach the service behind it.
         return _not_delivered(FailureKind.UNAVAILABLE)
-    if response.status_code >= 500:
-        # The application itself failed after receiving the batch.
+    if status >= 500:
+        # The application failed after receiving the batch, so the change may
+        # already have been applied.
         return _unknown(FailureKind.OUTCOME_UNKNOWN)
-    if response.status_code >= 400:
+    if status in (_LICENSE_EXPIRED, _INVALID_PARAMETER) or status >= 400:
+        # A documented refusal, or any other client error: a human corrects
+        # the licence or the request, and resending cannot help.
         return _not_delivered(FailureKind.REJECTION)
 
     body = _parse(response)
     if body is None:
         return _unknown(FailureKind.UNEXPECTED_RESPONSE)
-    code = body.get("responseCode")
-    message = body.get("responseMessage")
-    if not isinstance(code, str | int) or not isinstance(message, str):
-        return _unknown(FailureKind.UNEXPECTED_RESPONSE)
-    if str(code).strip().upper() not in _ACCEPTED_CODES:
-        # The vendor answered and declined; correcting the input is the fix.
-        return _not_delivered(FailureKind.REJECTION)
-
-    batch = body.get("customBatchId")
     return PageChangeOutcome(
         certainty=DeliveryCertainty.CONFIRMED,
         receipt=PageChangeReceipt(
-            response_code=str(code),
-            response_message=message,
-            custom_batch_id=str(batch) if isinstance(batch, str | int) else None,
+            response_code=_text(body.get("responseCode")),
+            response_message=_text(body.get("responseMessage")),
+            custom_batch_id=_optional_text(body.get("customBatchId")),
         ),
     )
+
+
+def _text(value: object) -> str:
+    """Every AimsApiResponse field is optional in the schema, so absence is empty."""
+
+    return str(value) if isinstance(value, str | int) else ""
+
+
+def _optional_text(value: object) -> str | None:
+    return str(value) if isinstance(value, str | int) else None
 
 
 def _parse(response: httpx.Response) -> Mapping[str, Any] | None:
