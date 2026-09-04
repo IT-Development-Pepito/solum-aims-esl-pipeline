@@ -36,6 +36,13 @@ from esl_service.application.contracts import (
 )
 from esl_service.application.operations import AuthorizedOperations
 from esl_service.application.persist_run import PersistedRun, RunContext, persist_run
+from esl_service.application.run_evidence import (
+    IssueEvidenceRow,
+    MetricRunRow,
+    ReconciliationReportRow,
+    RunEvidenceRows,
+    RunEvidenceService,
+)
 from esl_service.application.runner import RunOutcome, WorkflowRunner
 from esl_service.config import (
     Settings,
@@ -59,6 +66,7 @@ from esl_service.persistence.evidence_repository import (
 from esl_service.persistence.launch_repository import LaunchRepository
 from esl_service.persistence.reconciliation_repository import ReconciliationRepository
 from esl_service.persistence.repository import ExecutionRepository
+from esl_service.persistence.run_evidence_repository import RunEvidenceRepository
 from esl_service.persistence.snapshot_repository import SnapshotRepository
 from esl_service.runtime.cli_operations import OperationsUnavailable
 from esl_service.runtime.connectivity import SqlAlchemyConnector, build_probes
@@ -154,6 +162,27 @@ class TransactionalPorts:
         with self._scope() as session:
             return ExecutionRepository(session).query_executions(query)
 
+    # RunEvidencePort (#109)
+    def issues_for(self, execution_id: UUID) -> Sequence[IssueEvidenceRow]:
+        with self._scope() as session:
+            return RunEvidenceRepository(session).issues_for(execution_id)
+
+    def latest_report_for(
+        self, execution_id: UUID
+    ) -> ReconciliationReportRow | None:
+        with self._scope() as session:
+            return RunEvidenceRepository(session).latest_report_for(execution_id)
+
+    def run_evidence_for(self, execution_id: UUID) -> RunEvidenceRows:
+        with self._scope() as session:
+            return RunEvidenceRepository(session).run_evidence_for(execution_id)
+
+    def metric_evidence(self, *, per_scope_limit: int) -> Sequence[MetricRunRow]:
+        with self._scope() as session:
+            return RunEvidenceRepository(session).metric_evidence(
+                per_scope_limit=per_scope_limit
+            )
+
     # ReconciliationPort
     def finalize_report(
         self, execution_id: UUID, mode: ReconciliationMode, counts: ReconciliationCounts
@@ -229,6 +258,7 @@ class Host:
     settings: Settings
     ports: TransactionalPorts
     operations: AuthorizedOperations
+    run_evidence: RunEvidenceService
     health: HealthService
     scheduler: Scheduler
     ticker: ThreadedTicker
@@ -263,6 +293,24 @@ def build_operations(settings: Settings | None = None) -> AuthorizedOperations:
     )
 
 
+def build_run_evidence(settings: Settings | None = None) -> RunEvidenceService:
+    settings = settings or load_settings()
+    ports = TransactionalPorts(_session_factory(settings))
+    operations = AuthorizedOperations(
+        launches=ports,
+        schedules=ports,
+        status=ports,
+        reconciliation=ports,
+        audit=ports,
+    )
+    return RunEvidenceService(
+        operations,
+        ports,
+        clock=lambda: datetime.now(UTC),
+        metrics_run_limit=settings.metrics_run_limit,
+    )
+
+
 def build_principal(settings: Settings | None = None) -> Principal:
     return current_principal(settings or load_settings())
 
@@ -283,6 +331,12 @@ def build_host(settings: Settings | None = None) -> Host:
     operations = AuthorizedOperations(
         launches=ports, schedules=ports, status=ports, reconciliation=ports, audit=ports
     )
+    run_evidence = RunEvidenceService(
+        operations,
+        ports,
+        clock=lambda: datetime.now(UTC),
+        metrics_run_limit=settings.metrics_run_limit,
+    )
     try:
         tokens = tokens_from_bundle(_secrets(settings))
     except SecretUnavailableError:
@@ -292,6 +346,7 @@ def build_host(settings: Settings | None = None) -> Host:
         settings=settings,
         ports=ports,
         operations=operations,
+        run_evidence=run_evidence,
         health=build_health(settings),
         scheduler=scheduler,
         ticker=ticker,
@@ -316,6 +371,7 @@ def run_foreground(settings: Settings | None = None) -> None:
         health=host.health,
         scheduler=host.scheduler,
         audit=host.ports,
+        run_evidence=host.run_evidence,
         configuration_version_id=host.context.configuration_version_id,
         mode=host.context.mode,
     )

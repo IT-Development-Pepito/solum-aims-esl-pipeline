@@ -15,13 +15,13 @@ The listener itself is bound by the host to ``ESL_INTERNAL_HOST`` and
 reachable from a public interface.
 """
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Annotated, Any
 from uuid import UUID
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 from esl_service.application.operations import (
@@ -29,6 +29,11 @@ from esl_service.application.operations import (
     AuthorizedOperations,
     FallbackOutcome,
     InvalidOperationRequest,
+)
+from esl_service.application.run_evidence import (
+    IssueQuery,
+    ReportQuery,
+    RunEvidenceService,
 )
 from esl_service.domain.authorization import NotAuthorized, Operation, Principal
 from esl_service.domain.operations import (
@@ -40,7 +45,14 @@ from esl_service.domain.outcomes import ExecutionMode
 from esl_service.domain.scheduling import InvalidManualLaunch
 from esl_service.runtime.health import HealthService
 from esl_service.runtime.scheduler import Scheduler
+from esl_service.web.audit_schemas import (
+    ReconciliationReportResponse,
+    RecoveryResponse,
+    RunIssuesResponse,
+    StepEvidenceResponse,
+)
 from esl_service.web.auth import AuthenticationFailed, BearerTokenAuthenticator
+from esl_service.web.metrics import render_metrics
 
 SCHEDULER_PAUSED = "scheduler.paused"
 SCHEDULER_RESUMED = "scheduler.resumed"
@@ -104,7 +116,7 @@ class FallbackRequest(ReasonRequest):
 class ExecutionView(BaseModel):
     """The operator-facing shape of one run; identifiers and states only."""
 
-    model_config = ConfigDict(from_attributes=True, frozen=True)
+    model_config = ConfigDict(extra="forbid", from_attributes=True, frozen=True)
 
     id: UUID
     workflow_name: str
@@ -124,6 +136,13 @@ class ExecutionView(BaseModel):
     ended_at: datetime | None
     status: str
     terminal_reason: str | None
+
+
+class ExecutionDetailView(ExecutionView):
+    """One run plus its operator timeline and four-field recovery guidance."""
+
+    steps: tuple[StepEvidenceResponse, ...]
+    recovery: RecoveryResponse
 
 
 class LaunchResponse(_Strict):
@@ -190,6 +209,7 @@ def create_app(
     health: HealthService,
     scheduler: Scheduler,
     audit: AuditPort,
+    run_evidence: RunEvidenceService,
     configuration_version_id: UUID,
     clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     mode: ExecutionMode = ExecutionMode.SHADOW,
@@ -291,12 +311,55 @@ def create_app(
         )
         return [ExecutionView.model_validate(e) for e in operations.status(caller, query)]
 
-    @app.get("/runs/{execution_id}", response_model=ExecutionView)
-    def show_run(execution_id: UUID, caller: Caller) -> ExecutionView:
-        found: Sequence[object] = operations.status(caller, ExecutionQuery(execution_id=execution_id))
-        if not found:
-            raise HTTPException(status_code=404, detail=f"no execution with id {execution_id}")
-        return ExecutionView.model_validate(found[0])
+    @app.get("/runs/{execution_id}/issues", response_model=RunIssuesResponse)
+    def run_issues(
+        execution_id: UUID,
+        caller: Caller,
+        code: Annotated[str | None, Query()] = None,
+        severity: Annotated[str | None, Query()] = None,
+        item: Annotated[str | None, Query()] = None,
+        limit: Annotated[int, Query(ge=1, le=1000)] = 100,
+        offset: Annotated[int, Query(ge=0)] = 0,
+    ) -> RunIssuesResponse:
+        result = run_evidence.issues(
+            caller,
+            execution_id,
+            IssueQuery(code=code, severity=severity, item=item, limit=limit, offset=offset),
+        )
+        return RunIssuesResponse.model_validate(result)
+
+    @app.get("/runs/{execution_id}/report", response_model=ReconciliationReportResponse)
+    def run_report(
+        execution_id: UUID,
+        caller: Caller,
+        category: Annotated[str | None, Query()] = None,
+        item: Annotated[str | None, Query()] = None,
+        limit: Annotated[int, Query(ge=1, le=1000)] = 100,
+        offset: Annotated[int, Query(ge=0)] = 0,
+    ) -> ReconciliationReportResponse:
+        result = run_evidence.report(
+            caller,
+            execution_id,
+            ReportQuery(category=category, item=item, limit=limit, offset=offset),
+        )
+        return ReconciliationReportResponse.model_validate(result)
+
+    @app.get("/runs/{execution_id}", response_model=ExecutionDetailView)
+    def show_run(execution_id: UUID, caller: Caller) -> ExecutionDetailView:
+        detail = run_evidence.run_detail(caller, execution_id)
+        execution = ExecutionView.model_validate(detail.execution)
+        return ExecutionDetailView.model_validate(
+            {
+                **execution.model_dump(),
+                "steps": detail.steps,
+                "recovery": detail.recovery,
+            }
+        )
+
+    @app.get("/metrics")
+    def metrics(caller: Caller) -> Response:
+        body, content_type = render_metrics(run_evidence.metrics(caller))
+        return Response(content=body, headers={"Content-Type": content_type})
 
     @app.post("/runs/{execution_id}/retry", status_code=202, response_model=LaunchResponse)
     def retry(execution_id: UUID, body: ReasonRequest, caller: Caller) -> LaunchResponse:

@@ -35,3 +35,17 @@ def test_the_port_is_in_the_configuration_snapshot() -> None:
     snapshot = sanitized_configuration_snapshot(Settings.model_validate(BASE))
 
     assert snapshot["internal_port"] == 8000
+
+
+def test_metrics_use_a_bounded_configurable_recent_run_window() -> None:
+    settings = Settings.model_validate(BASE)
+    configured = Settings.model_validate({**BASE, "metrics_run_limit": 7})
+
+    assert settings.metrics_run_limit == 20
+    assert configured.metrics_run_limit == 7
+    assert sanitized_configuration_snapshot(configured)["metrics_run_limit"] == 7
+
+
+def test_metrics_run_limit_must_be_positive() -> None:
+    with pytest.raises(ValidationError):
+        Settings.model_validate({**BASE, "metrics_run_limit": 0})

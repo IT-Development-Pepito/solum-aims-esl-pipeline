@@ -91,6 +91,7 @@ def _service_class() -> type[Any]:
                 health=host.health,
                 scheduler=host.scheduler,
                 audit=host.ports,
+                run_evidence=host.run_evidence,
                 configuration_version_id=host.context.configuration_version_id,
                 mode=host.context.mode,
             )

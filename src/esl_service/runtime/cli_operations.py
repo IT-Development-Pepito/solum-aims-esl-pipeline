@@ -14,6 +14,7 @@ defaults build everything from ``Settings`` and the DPAPI bundle; when that
 is impossible the command says why by category, never with a traceback.
 """
 
+import json
 from collections.abc import Callable, Sequence
 from datetime import datetime
 from typing import Annotated
@@ -24,6 +25,14 @@ import typer
 from esl_service.application.operations import (
     AuthorizedOperations,
     InvalidOperationRequest,
+)
+from esl_service.application.run_evidence import (
+    IssueQuery,
+    IssueRead,
+    ReportQuery,
+    ReportRead,
+    RunDetailRead,
+    RunEvidenceService,
 )
 from esl_service.domain.authorization import NotAuthorized, Principal
 from esl_service.domain.operations import (
@@ -114,9 +123,26 @@ def _default_steps(execution_id: UUID) -> Sequence[object]:
 _steps: Callable[[UUID], Sequence[object]] = _default_steps
 
 
+def _default_run_evidence() -> RunEvidenceService:
+    from esl_service.runtime.host import build_run_evidence
+
+    return build_run_evidence()
+
+
+_run_evidence: Callable[[], RunEvidenceService] = _default_run_evidence
+
+
 def _service() -> tuple[AuthorizedOperations, Principal]:
     try:
         return _operations(), _principal()
+    except OperationsUnavailable as error:
+        typer.echo(f"Unavailable: {error}")
+        raise typer.Exit(code=1) from None
+
+
+def _evidence_service() -> tuple[RunEvidenceService, Principal]:
+    try:
+        return _run_evidence(), _principal()
     except OperationsUnavailable as error:
         typer.echo(f"Unavailable: {error}")
         raise typer.Exit(code=1) from None
@@ -247,17 +273,16 @@ def runs_show(execution_id: UUID) -> None:
         typer.echo(f"Not found: no execution with id {execution_id}")
         raise typer.Exit(code=1)
     _print_execution(found[0])
-    _print_steps(execution_id)
+    evidence, evidence_principal = _evidence_service()
+    detail = _run(lambda: evidence.run_detail(evidence_principal, execution_id))
+    assert isinstance(detail, RunDetailRead)
+    _print_steps(detail.steps)
+    _print_recovery(detail.recovery)
 
 
-def _print_steps(execution_id: UUID) -> None:
+def _print_steps(steps: Sequence[object]) -> None:
     """Show where the run is: each step's latest attempt and its last checkpoint (#102)."""
 
-    try:
-        steps = _steps(execution_id)
-    except OperationsUnavailable as error:
-        typer.echo(f"steps: unavailable ({error})")
-        return
     if not steps:
         typer.echo("steps: none yet")
         return
@@ -268,12 +293,99 @@ def _print_steps(execution_id: UUID) -> None:
             f"step {getattr(step, 'step_name', '?')}: {getattr(step, 'outcome', '?')} "
             f"(attempt {getattr(step, 'attempt', '?')}{detail})"
         )
-        checkpoints = list(getattr(step, "checkpoints", ()) or ())
-        if checkpoints:
-            last = checkpoints[-1]
+        typer.echo(f"  duration_seconds: {getattr(step, 'duration_seconds', None)}")
+        checkpoint_key = getattr(step, "checkpoint_key", None)
+        if checkpoint_key is not None:
             typer.echo(
-                f"  checkpoint {getattr(last, 'checkpoint_key', '?')} @ {getattr(last, 'watermark', '?')}"
+                f"  checkpoint {checkpoint_key} @ {getattr(step, 'checkpoint_watermark', None)}"
             )
+        counts = getattr(step, "checkpoint_counts", {})
+        if counts:
+            typer.echo(f"  checkpoint_counts: {json.dumps(counts, sort_keys=True)}")
+
+
+def _print_recovery(recovery: object) -> None:
+    typer.echo(f"recovery_scope: {getattr(recovery, 'scope', None)}")
+    typer.echo(f"recovery_checkpoint: {getattr(recovery, 'checkpoint', None)}")
+    typer.echo(f"recovery_resume_from: {getattr(recovery, 'resume_from', None)}")
+    uncertainty = getattr(recovery, "external_uncertainty", ())
+    typer.echo(f"recovery_external_uncertainty: {len(uncertainty)}")
+    typer.echo(f"recovery_next_action: {getattr(recovery, 'next_operator_action', None)}")
+
+
+@runs_app.command("issues")
+def runs_issues(
+    execution_id: UUID,
+    code: Annotated[str | None, typer.Option("--code")] = None,
+    severity: Annotated[str | None, typer.Option("--severity")] = None,
+    item: Annotated[str | None, typer.Option("--item")] = None,
+    limit: Annotated[int, typer.Option("--limit", min=1, max=1000)] = 100,
+    offset: Annotated[int, typer.Option("--offset", min=0)] = 0,
+) -> None:
+    """Summarize one run's issue codes and optionally drill into records."""
+
+    evidence, principal = _evidence_service()
+    result = _run(
+        lambda: evidence.issues(
+            principal,
+            execution_id,
+            IssueQuery(code=code, severity=severity, item=item, limit=limit, offset=offset),
+        )
+    )
+    assert isinstance(result, IssueRead)
+    for group in result.groups:
+        typer.echo(
+            f"{group.issue_code}  {group.rule_id}  {group.severity}  count: {group.count}"
+        )
+    if not result.groups:
+        typer.echo("No issues match.")
+    if code is not None or severity is not None or item is not None:
+        for row in result.records:
+            uom = row.selling_uom or "-"
+            typer.echo(f"item: {row.store_code}/{row.item_code}/{uom}")
+            typer.echo(f"  evidence: {json.dumps(row.evidence, sort_keys=True)}")
+        typer.echo(
+            f"records: {len(result.records)} of {result.total} "
+            f"(limit {result.limit}, offset {result.offset})"
+        )
+
+
+@runs_app.command("report")
+def runs_report(
+    execution_id: UUID,
+    category: Annotated[str | None, typer.Option("--category")] = None,
+    item: Annotated[str | None, typer.Option("--item")] = None,
+    limit: Annotated[int, typer.Option("--limit", min=1, max=1000)] = 100,
+    offset: Annotated[int, typer.Option("--offset", min=0)] = 0,
+) -> None:
+    """Show the latest reconciliation revision and its exceptions."""
+
+    evidence, principal = _evidence_service()
+    result = _run(
+        lambda: evidence.report(
+            principal,
+            execution_id,
+            ReportQuery(category=category, item=item, limit=limit, offset=offset),
+        )
+    )
+    assert isinstance(result, ReportRead)
+    typer.echo(f"revision: {result.revision}")
+    typer.echo(f"mode: {result.mode}")
+    typer.echo(f"status: {result.status}")
+    for name, count in result.counts.items():
+        typer.echo(f"{name}: {count}")
+    for group in result.groups:
+        typer.echo(f"exception {group.category}  count: {group.count}")
+    if category is not None or item is not None:
+        for row in result.exceptions:
+            uom = row.selling_uom or "-"
+            typer.echo(f"item: {row.store_code}/{row.item_code}/{uom}  {row.category}")
+            typer.echo(f"  computed: {json.dumps(row.expected_evidence, sort_keys=True)}")
+            typer.echo(f"  legacy_or_actual: {json.dumps(row.actual_evidence, sort_keys=True)}")
+        typer.echo(
+            f"exceptions: {len(result.exceptions)} of {result.total} "
+            f"(limit {result.limit}, offset {result.offset})"
+        )
 
 
 @runs_app.command("list")

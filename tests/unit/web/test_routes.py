@@ -11,7 +11,7 @@ holding an operator credential.
 
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -19,6 +19,14 @@ import pytest
 from fastapi.testclient import TestClient
 
 from esl_service.application.operations import AuthorizedOperations
+from esl_service.application.run_evidence import (
+    IssueEvidenceRow,
+    MetricRunRow,
+    ReconciliationExceptionRow,
+    ReconciliationReportRow,
+    RunEvidenceRows,
+    RunEvidenceService,
+)
 from esl_service.domain.authorization import OPERATION_REFUSED, Role
 from esl_service.domain.operations import ExecutionQuery, ReplayRequest, RetryRequest
 from esl_service.domain.scheduling import ManualLaunch
@@ -54,6 +62,7 @@ class FakeExecution:
     ended_at: datetime | None = None
     status: str = "QUEUED"
     terminal_reason: str | None = None
+    retry_not_before: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -144,6 +153,31 @@ class FakeRepositories:
         return fields
 
 
+@dataclass
+class FakeRunEvidencePort:
+    repositories: FakeRepositories
+    issues: tuple[IssueEvidenceRow, ...] = ()
+    report: ReconciliationReportRow | None = None
+    steps: dict[UUID, tuple[object, ...]] = field(default_factory=dict)
+    metrics: tuple[MetricRunRow, ...] = ()
+
+    def issues_for(self, execution_id: UUID) -> tuple[IssueEvidenceRow, ...]:
+        return self.issues
+
+    def latest_report_for(self, execution_id: UUID) -> ReconciliationReportRow | None:
+        return self.report
+
+    def run_evidence_for(self, execution_id: UUID) -> RunEvidenceRows:
+        execution = next((item for item in self.repositories.executions if item.id == execution_id), None)
+        if execution is None:
+            raise LookupError(f"no execution with id {execution_id}")
+        return RunEvidenceRows(execution, self.steps.get(execution_id, ()), ())
+
+    def metric_evidence(self, *, per_scope_limit: int) -> tuple[MetricRunRow, ...]:
+        assert per_scope_limit == 20
+        return self.metrics
+
+
 class HealthyProbe:
     name = "state_store"
     required = True
@@ -170,6 +204,7 @@ class NoLaunches:
 @dataclass
 class Harness:
     repositories: FakeRepositories
+    evidence: FakeRunEvidencePort
     scheduler: Scheduler
     client: TestClient
 
@@ -183,6 +218,10 @@ def build(probe: HealthyProbe | None = None) -> Harness:
         reconciliation=repositories,
         audit=repositories,
         clock=lambda: NOW,
+    )
+    evidence = FakeRunEvidencePort(repositories)
+    run_evidence = RunEvidenceService(
+        operations, evidence, clock=lambda: NOW, metrics_run_limit=20
     )
     from esl_service.domain.outcomes import ExecutionMode
     from esl_service.runtime.scheduler import LaunchContext
@@ -201,10 +240,11 @@ def build(probe: HealthyProbe | None = None) -> Harness:
         health=HealthService([probe or HealthyProbe()]),
         scheduler=scheduler,
         audit=repositories,
+        run_evidence=run_evidence,
         configuration_version_id=CONFIGURATION_VERSION_ID,
         clock=lambda: NOW,
     )
-    return Harness(repositories, scheduler, TestClient(app))
+    return Harness(repositories, evidence, scheduler, TestClient(app))
 
 
 @pytest.fixture
@@ -342,6 +382,171 @@ def test_one_run_is_fetched_by_id_and_404_when_absent(harness: Harness) -> None:
 
     assert found.status_code == 200 and found.json()["id"] == created["id"]
     assert missing.status_code == 404
+
+
+def test_issue_summary_and_drilldown_share_the_api_filter_contract(harness: Harness) -> None:
+    """Ignoring API filters would make the #29 UI disagree with the CLI."""
+
+    execution = harness.client.post("/runs", json=RUN_BODY, headers=OPERATOR).json()["execution"]
+    harness.evidence.issues = (
+        IssueEvidenceRow("084", "A", "KGS", "BR-006", "MISSING_PRICE", "ERROR", {"price_category": "001"}),
+        IssueEvidenceRow("084", "B", None, "BR-002", "ITEM_INACTIVE", "WARNING", {"status": "C"}, True),
+    )
+
+    response = harness.client.get(
+        f"/runs/{execution['id']}/issues",
+        params={"code": "ITEM_INACTIVE", "severity": "warning", "item": "B", "limit": 5, "offset": 0},
+        headers=OPERATOR,
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {
+        "execution_id": execution["id"],
+        "groups": [{"issue_code": "ITEM_INACTIVE", "rule_id": "BR-002", "severity": "WARNING", "count": 1}],
+        "records": [{
+            "store_code": "084",
+            "item_code": "B",
+            "selling_uom": None,
+            "rule_id": "BR-002",
+            "issue_code": "ITEM_INACTIVE",
+            "severity": "WARNING",
+            "evidence": {"status": "C"},
+            "keyless": True,
+        }],
+        "total": 1,
+        "limit": 5,
+        "offset": 0,
+    }
+
+
+def test_issue_read_requires_operator_and_audits_refusal(harness: Harness) -> None:
+    execution_id = uuid4()
+
+    response = harness.client.get(f"/runs/{execution_id}/issues", headers=GUEST)
+
+    assert response.status_code == 403
+    assert harness.repositories.audit[-1]["action"] == OPERATION_REFUSED
+    assert harness.repositories.audit[-1]["resource_key"] == str(execution_id)
+
+
+def test_latest_reconciliation_report_exposes_legacy_values_side_by_side(harness: Harness) -> None:
+    execution = harness.client.post("/runs", json=RUN_BODY, headers=OPERATOR).json()["execution"]
+    counts = {
+        "extracted": 1, "rejected": 0, "valid": 1, "ineligible": 0, "eligible": 1,
+        "unchanged": 0, "skipped_idempotent": 0, "intended": 0, "acknowledged": 0,
+        "rejected_by_aims": 0, "failed": 0, "unresolved": 1, "submitted": 0, "ambiguous": 1,
+    }
+    harness.evidence.report = ReconciliationReportRow(
+        3,
+        "SHADOW",
+        "FINALIZED",
+        NOW,
+        NOW,
+        counts,
+        (
+            ReconciliationExceptionRow(
+                7,
+                "LEGACY_BASELINE_MISMATCH",
+                "084",
+                "A",
+                "KGS",
+                {"source_regular_price": "50000"},
+                {"SALES_PRICE": "49000"},
+                "OPEN",
+            ),
+        ),
+    )
+
+    response = harness.client.get(
+        f"/runs/{execution['id']}/report",
+        params={"category": "LEGACY_BASELINE_MISMATCH", "item": "A"},
+        headers=OPERATOR,
+    )
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["revision"] == 3 and body["counts"]["unresolved"] == 1
+    assert body["groups"] == [{"category": "LEGACY_BASELINE_MISMATCH", "count": 1}]
+    assert body["exceptions"][0]["expected_evidence"] == {"source_regular_price": "50000"}
+    assert body["exceptions"][0]["actual_evidence"] == {"SALES_PRICE": "49000"}
+
+
+def test_run_detail_includes_step_duration_checkpoint_counts_and_recovery(harness: Harness) -> None:
+    @dataclass(frozen=True)
+    class Checkpoint:
+        checkpoint_key: str
+        watermark: str
+        payload: dict[str, object]
+
+    @dataclass(frozen=True)
+    class Step:
+        step_name: str
+        attempt: int
+        outcome: str
+        failure_class: str | None
+        started_at: datetime
+        ended_at: datetime | None
+        checkpoints: tuple[Checkpoint, ...]
+
+    execution = harness.client.post("/runs", json=RUN_BODY, headers=OPERATOR).json()["execution"]
+    execution_id = UUID(execution["id"])
+    harness.evidence.steps[execution_id] = (
+        Step(
+            "canonicalize",
+            1,
+            "SUCCEEDED",
+            None,
+            NOW,
+            NOW + timedelta(seconds=2.5),
+            (Checkpoint("canonicalize:done", "wm", {"records": 2, "extracted": 3, "rejected": 1, "unresolved": 1, "issues": 2}),),
+        ),
+    )
+
+    response = harness.client.get(f"/runs/{execution_id}", headers=OPERATOR)
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["id"] == execution["id"]
+    assert body["steps"][0]["duration_seconds"] == 2.5
+    assert body["steps"][0]["checkpoint_counts"] == {
+        "records": 2, "extracted": 3, "rejected": 1, "unresolved": 1, "issues": 2
+    }
+    assert set(body["recovery"]) == {
+        "scope", "source_window_start", "source_window_end", "status", "terminal_reason",
+        "checkpoint", "resume_from", "external_uncertainty", "next_operator_action",
+    }
+
+
+def test_metrics_are_token_protected_aggregates_without_execution_id_labels(harness: Harness) -> None:
+    @dataclass(frozen=True)
+    class Step:
+        step_name: str = "persist"
+        attempt: int = 1
+        outcome: str = "SUCCEEDED"
+        failure_class: str | None = None
+        started_at: datetime = NOW
+        ended_at: datetime | None = NOW + timedelta(seconds=4)
+        checkpoints: tuple[object, ...] = ()
+
+    harness.evidence.metrics = (
+        MetricRunRow(
+            "esl-refresh",
+            "084",
+            (IssueEvidenceRow("084", "A", "KGS", "BR-006", "MISSING_PRICE", "ERROR", {}),),
+            {"unresolved": 2},
+            (Step(),),
+        ),
+    )
+
+    missing = harness.client.get("/metrics")
+    response = harness.client.get("/metrics", headers=OPERATOR)
+
+    assert missing.status_code == 401
+    assert response.status_code == 200, response.text
+    assert 'esl_run_issue_count{issue_code="MISSING_PRICE",store="084",workflow="esl-refresh"} 1.0' in response.text
+    assert 'esl_run_reconciliation_count{count_name="unresolved",store="084",workflow="esl-refresh"} 2.0' in response.text
+    assert 'esl_run_step_duration_seconds_sum{step="persist",store="084",workflow="esl-refresh"} 4.0' in response.text
+    assert "execution_id" not in response.text
 
 
 def test_retry_and_replay_carry_the_token_holder_and_reason(harness: Harness) -> None:
