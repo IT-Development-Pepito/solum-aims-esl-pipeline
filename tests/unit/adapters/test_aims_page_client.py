@@ -1,12 +1,9 @@
 """Contract tests for the AIMS page-change adapter (#23, AD-021).
 
-The contract of record is the deployed Dashboard operation
-``POST /dashboardservice/common/labels/page?store=<code>`` with a
-``pageChangeList`` of ``labelCode``/``page`` entries, evidenced by the three
-Hop ``.hpl`` REST steps that have posted to it in production and by the
-runbook section 13.6; the response fields ``responseCode``,
-``responseMessage``, and ``customBatchId`` are the VERIFIED reading of the
-deployed OpenAPI recorded in ``docs/SPECIFICATION.md``.
+The contract of record is the captured OpenAPI document itself,
+``docs/hop-jenkins-pipeline/AIMS-Dashboard-OpenAPI-common.json``. The first
+test below reads it and asserts the adapter agrees with it, so a vendor
+upgrade that changes the operation fails this suite rather than production.
 
 Every case below fixes one row of the architecture section 8 matrix, and the
 split that matters most is between "the request never arrived" and "the
@@ -14,11 +11,18 @@ request may have been applied and we have no answer". The first is
 retryable; the second is never resent automatically (FR-013).
 """
 
+import json
+from pathlib import Path
+
 import httpx
 import pytest
 import respx
 
-from esl_service.adapters.aims_page import AimsPageClientHttp, PageChangeRequestError
+from esl_service.adapters.aims_page import (
+    PAGE_CHANGE_PATH,
+    AimsPageClientHttp,
+    PageChangeRequestError,
+)
 from esl_service.application.contracts import AimsPageClient, PageChange
 from esl_service.domain.actions import DeliveryCertainty
 from esl_service.domain.failures import (
@@ -47,6 +51,46 @@ def accepted(**overrides: object) -> dict[str, object]:
     }
     body.update(overrides)
     return body
+
+
+SPEC = json.loads(
+    (Path(__file__).resolve().parents[3] / "docs/hop-jenkins-pipeline/AIMS-Dashboard-OpenAPI-common.json")
+    .read_text(encoding="utf-8-sig")
+)
+
+
+# --- the adapter agrees with the captured document -------------------------------
+
+
+def test_the_adapter_matches_the_captured_operation_of_record() -> None:
+    """Read the vendor's own document; do not restate it from memory."""
+
+    operation = SPEC["paths"][PAGE_CHANGE_PATH]["post"]
+    assert operation["operationId"] == "changeDisplayPage"
+    assert [(p["name"], p["in"], p["required"]) for p in operation["parameters"]] == [
+        ("store", "query", True)
+    ]
+    body = operation["requestBody"]
+    assert body["required"] is True
+    assert body["content"]["application/json;charset=UTF-8"]["schema"]["$ref"].endswith(
+        "/UpdateDisplayPage"
+    )
+    schemas = SPEC["components"]["schemas"]
+    assert set(schemas["UpdateDisplayPageInfo"]["properties"]) == {"page", "labelCode"}
+    assert schemas["UpdateDisplayPageInfo"]["properties"]["page"]["type"] == "integer"
+    assert set(schemas["AimsApiResponse"]["properties"]) == {
+        "responseCode", "responseMessage", "customBatchId",
+    }
+    # Nothing is required, which is why the adapter reads the status, not the body.
+    assert "required" not in schemas["AimsApiResponse"]
+    assert set(operation["responses"]) == {"200", "402", "405", "500"}
+
+
+def test_the_document_declares_no_authentication_scheme() -> None:
+    """The evidence behind AD-021, asserted rather than quoted."""
+
+    assert SPEC["security"] == []
+    assert "securitySchemes" not in SPEC["components"]
 
 
 # --- the request the vendor documents -------------------------------------------
@@ -128,12 +172,11 @@ def test_a_missing_batch_id_is_still_a_confirmation() -> None:
 
 
 @respx.mock
-@pytest.mark.parametrize("body", [
-    {"responseCode": "400", "responseMessage": "INVALID LABEL"},
-    {"responseCode": "E001", "responseMessage": "unknown store"},
-])
-def test_a_refusal_the_vendor_states_is_non_retryable(body: dict[str, str]) -> None:
-    respx.post(PAGE_URL).mock(return_value=httpx.Response(200, json=body))
+@pytest.mark.parametrize("status", [402, 405, 400, 404])
+def test_a_documented_or_other_client_refusal_is_non_retryable(status: int) -> None:
+    """402 License is expired and 405 Parameter is invalid are the vendor's own."""
+
+    respx.post(PAGE_URL).mock(return_value=httpx.Response(status, text="refused"))
 
     outcome = client().change_pages(STORE, CHANGES, KEY)
 
@@ -143,13 +186,34 @@ def test_a_refusal_the_vendor_states_is_non_retryable(body: dict[str, str]) -> N
 
 
 @respx.mock
-def test_a_client_error_status_is_a_refusal() -> None:
-    respx.post(PAGE_URL).mock(return_value=httpx.Response(400, text="bad request"))
+def test_a_response_code_is_recorded_as_evidence_not_read_as_a_verdict() -> None:
+    """The document defines no code vocabulary, so inventing one would be a guess.
+
+    A 200 is the documented success; whatever code it carries is kept for the
+    operator, and #24/#25 reconciliation is what would catch a body that
+    declines while the status says OK.
+    """
+
+    respx.post(PAGE_URL).mock(
+        return_value=httpx.Response(200, json={"responseCode": "E001", "responseMessage": "odd"})
+    )
 
     outcome = client().change_pages(STORE, CHANGES, KEY)
 
-    assert outcome.certainty is DeliveryCertainty.NOT_DELIVERED
-    assert outcome.failure == _signal(FailureKind.REJECTION)
+    assert outcome.certainty is DeliveryCertainty.CONFIRMED
+    assert outcome.receipt is not None
+    assert (outcome.receipt.response_code, outcome.receipt.response_message) == ("E001", "odd")
+
+
+@respx.mock
+def test_an_empty_object_is_confirmed_because_no_field_is_required() -> None:
+    respx.post(PAGE_URL).mock(return_value=httpx.Response(200, json={}))
+
+    outcome = client().change_pages(STORE, CHANGES, KEY)
+
+    assert outcome.certainty is DeliveryCertainty.CONFIRMED
+    assert outcome.receipt is not None
+    assert (outcome.receipt.response_code, outcome.receipt.custom_batch_id) == ("", None)
 
 
 # --- the vendor answered and we could not read it --------------------------------
@@ -158,8 +222,8 @@ def test_a_client_error_status_is_a_refusal() -> None:
 @respx.mock
 @pytest.mark.parametrize("response", [
     httpx.Response(200, text="<html>not json</html>"),
-    httpx.Response(200, json={"unexpected": "shape"}),
     httpx.Response(200, json=["a", "list"]),
+    httpx.Response(200, content=bytes([0xff, 0xfe, 0x20])),
 ])
 def test_an_unreadable_answer_leaves_the_outcome_unknown(response: httpx.Response) -> None:
     """A 200 we cannot parse may already have moved the label, so it is not a clean failure."""
