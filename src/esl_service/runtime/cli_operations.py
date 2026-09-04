@@ -423,6 +423,20 @@ def runs_retry(execution_id: UUID, reason: Reason) -> None:
     _print_launch(_run(lambda: operations.retry(principal, execution_id, reason, correlation_id=uuid4())))
 
 
+@runs_app.command("replay-snapshot")
+def runs_replay_snapshot(execution_id: UUID, reason: Reason) -> None:
+    """Reproduce a run from its retained snapshot without reading any source (#114).
+
+    Unlike `runs replay`, which re-reads live sources over a window you give,
+    this takes no window: the retained capture's own window and versions apply.
+    """
+
+    operations, principal = _service()
+    _print_launch(
+        _run(lambda: operations.replay_snapshot(principal, execution_id, reason, correlation_id=uuid4()))
+    )
+
+
 @runs_app.command("replay")
 def runs_replay(
     execution_id: UUID, reason: Reason, window_start: WindowStart, window_end: WindowEnd

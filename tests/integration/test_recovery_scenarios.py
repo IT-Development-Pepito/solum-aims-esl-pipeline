@@ -106,6 +106,7 @@ class Committed:
             sources=sources,
             retry_policy=POLICY,
             persist=ports.persist,
+            replay=ports.replay,
             clock=lambda: CLOCK,
             jitter=lambda: 0.0,
         )
@@ -184,7 +185,8 @@ def committed(migrated_database_url: str) -> Iterator[Committed]:
         try:
             yield state
         finally:
-            for execution_id in state.executions:
+            # newest first: a replay references its original (RESTRICT)
+            for execution_id in reversed(state.executions):
                 purge_execution(engine, execution_id)
             purge_configuration_versions(engine, MARKER)
 
@@ -411,3 +413,33 @@ def test_a_server_restart_is_recovered_by_a_fresh_engine_over_the_same_state(com
         lease = ExecutionRepository(session).get_lease("esl-refresh:084")
         assert lease is not None and lease.execution_id == execution_id and lease.released_at is not None
     assert committed.counts(execution_id) == (1, 1, 1)
+
+
+# --- snapshot replay through the real committed ports (#114) ---------------------
+
+
+def test_a_snapshot_replay_runs_through_the_host_ports_without_reading_a_source(
+    committed: Committed,
+) -> None:
+    """The runtime wiring hands the replay step its own committed transaction (#114)."""
+
+    from esl_service.application.replay import STEP_REPLAY_SNAPSHOT
+    from esl_service.domain.operations import SnapshotReplayRequest
+
+    sources = ScriptedSources()
+    runner = committed.runner(sources)
+    original_id = committed.launch()
+    assert runner.run(original_id).status is ExecutionStatus.SUCCEEDED_WITH_EXCEPTIONS
+    launched = committed.ports().launch_snapshot_replay(
+        original_id, SnapshotReplayRequest(requested_by="ops.alice", reason="INC-9"), correlation_id=uuid4()
+    )
+    assert launched.execution is not None
+    committed.executions.append(launched.execution.id)
+    sources.calls.clear()
+
+    outcome = runner.run(launched.execution.id)
+
+    assert outcome.status is ExecutionStatus.SUCCEEDED
+    assert outcome.steps == (STEP_REPLAY_SNAPSHOT,)
+    assert sources.calls == []
+    assert committed.counts(launched.execution.id) == (1, 1, 0)  # capture, report, no action

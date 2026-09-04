@@ -331,3 +331,122 @@ def test_bounded_replay_creates_a_linked_audited_execution(
         "source_window_start": REPLAY_START.isoformat(),
         "source_window_end": REPLAY_END.isoformat(),
     }
+
+
+# --- snapshot replay (#114) -----------------------------------------------------
+
+
+def _reconciled_original(
+    session: Session, execution_repository: ExecutionRepository, configuration_version_id: UUID
+) -> WorkflowExecution:
+    """An original run with a finalized SOURCE_EXPECTED capture and a finalized report."""
+
+    from esl_service.domain.reconciliation import (
+        ReconciliationCounts,
+        ReconciliationMode,
+    )
+    from esl_service.persistence.reconciliation_repository import (
+        ReconciliationRepository,
+    )
+
+    original = execution_repository.create_execution(new_execution(configuration_version_id))
+    snapshots = SnapshotRepository(session)
+    capture = snapshots.create_snapshot_set(
+        execution_id=original.id,
+        representation_kind="SOURCE_EXPECTED",
+        adapter_name="test",
+        source_watermark="w",
+        canonical_schema_version="canonical-v1",
+    )
+    snapshots.append_record(capture.id, canonical_record())
+    snapshots.finalize_snapshot_set(capture.id)
+    ReconciliationRepository(session).finalize_report(
+        original.id,
+        ReconciliationMode.SHADOW,
+        ReconciliationCounts(1, 0, 1, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0),
+    )
+    session.flush()
+    return original
+
+
+def test_a_snapshot_replay_is_linked_and_carries_the_original_window_and_versions(
+    session: Session, execution_repository: ExecutionRepository, configuration_version_id: UUID
+) -> None:
+    from esl_service.domain.operations import SnapshotReplayRequest
+
+    original = _reconciled_original(session, execution_repository, configuration_version_id)
+
+    launched = LaunchRepository(session).launch_snapshot_replay(
+        original.id,
+        SnapshotReplayRequest(requested_by="ops.alice", reason="INC-9 reproduce"),
+        correlation_id=uuid4(),
+    )
+
+    assert launched.execution is not None
+    replay = launched.execution
+    assert replay.trigger_type == TriggerType.SNAPSHOT_REPLAY.value
+    assert replay.replay_of_execution_id == original.id
+    assert (replay.source_window_start, replay.source_window_end) == (
+        original.source_window_start, original.source_window_end,
+    )
+    assert replay.configuration_version_id == original.configuration_version_id
+    assert replay.rule_version == original.rule_version
+    audit = session.scalars(
+        select(AuditEntry).where(AuditEntry.execution_id == replay.id, AuditEntry.action == WORKFLOW_LAUNCHED)
+    ).one()
+    assert audit.after_evidence["trigger_type"] == TriggerType.SNAPSHOT_REPLAY.value
+    assert audit.after_evidence["replay_of_execution_id"] == str(original.id)
+
+
+def test_a_snapshot_replay_of_purged_evidence_is_refused_and_audited(
+    session: Session, execution_repository: ExecutionRepository, configuration_version_id: UUID
+) -> None:
+    from esl_service.domain.operations import (
+        WORKFLOW_SNAPSHOT_REPLAY_REFUSED,
+        SnapshotReplayRefusalReason,
+        SnapshotReplayRequest,
+    )
+
+    original = execution_repository.create_execution(new_execution(configuration_version_id))
+
+    launched = LaunchRepository(session).launch_snapshot_replay(
+        original.id,
+        SnapshotReplayRequest(requested_by="ops.alice", reason="INC-9"),
+        correlation_id=uuid4(),
+    )
+
+    assert launched.execution is None
+    assert launched.control_refusal is SnapshotReplayRefusalReason.SNAPSHOT_EVIDENCE_MISSING
+    refusal = session.scalars(
+        select(AuditEntry).where(
+            AuditEntry.execution_id == original.id, AuditEntry.action == WORKFLOW_SNAPSHOT_REPLAY_REFUSED
+        )
+    ).one()
+    assert refusal.outcome == "SNAPSHOT_EVIDENCE_MISSING"
+
+
+def test_a_snapshot_replay_of_an_unreconciled_run_is_refused(
+    session: Session, execution_repository: ExecutionRepository, configuration_version_id: UUID
+) -> None:
+    from esl_service.domain.operations import (
+        SnapshotReplayRefusalReason,
+        SnapshotReplayRequest,
+    )
+
+    original = execution_repository.create_execution(new_execution(configuration_version_id))
+    snapshots = SnapshotRepository(session)
+    capture = snapshots.create_snapshot_set(
+        execution_id=original.id, representation_kind="SOURCE_EXPECTED", adapter_name="test",
+        source_watermark="w", canonical_schema_version="canonical-v1",
+    )
+    snapshots.append_record(capture.id, canonical_record())
+    snapshots.finalize_snapshot_set(capture.id)
+
+    launched = LaunchRepository(session).launch_snapshot_replay(
+        original.id,
+        SnapshotReplayRequest(requested_by="ops.alice", reason="INC-9"),
+        correlation_id=uuid4(),
+    )
+
+    assert launched.execution is None
+    assert launched.control_refusal is SnapshotReplayRefusalReason.RECONCILIATION_UNRESOLVED

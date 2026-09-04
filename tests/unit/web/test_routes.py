@@ -94,6 +94,7 @@ class FakeRepositories:
     audit: list[dict[str, Any]] = field(default_factory=list)
     retries: list[tuple[UUID, RetryRequest]] = field(default_factory=list)
     replays: list[tuple[UUID, ReplayRequest]] = field(default_factory=list)
+    snapshot_replays: list[tuple[UUID, Any]] = field(default_factory=list)
 
     # LaunchPort / SchedulePort
     def launch_manual(self, launch: ManualLaunch, **fields: Any) -> FakeLaunchResult:
@@ -118,6 +119,12 @@ class FakeRepositories:
     ) -> FakeLaunchResult:
         self.replays.append((execution_id, request))
         execution = FakeExecution(uuid4(), trigger_type="REPLAY", replay_of_execution_id=execution_id)
+        self.executions.append(execution)
+        return FakeLaunchResult(execution)
+
+    def launch_snapshot_replay(self, execution_id: UUID, request: Any, **_: Any) -> FakeLaunchResult:
+        self.snapshot_replays.append((execution_id, request))
+        execution = FakeExecution(uuid4(), trigger_type="SNAPSHOT_REPLAY", replay_of_execution_id=execution_id)
         self.executions.append(execution)
         return FakeLaunchResult(execution)
 
@@ -667,3 +674,20 @@ def test_a_forbidden_evidence_key_is_withheld_with_a_fixed_500_not_a_traceback(h
     assert response.status_code == 500
     assert response.json()["detail"].startswith("evidence withheld")
     assert "needle-value" not in response.text and "Traceback" not in response.text
+
+
+def test_a_snapshot_replay_is_posted_with_a_reason_only_and_names_its_trigger(harness: Harness) -> None:
+    """#114: no window in the body; the retained capture's own window applies."""
+
+    origin = uuid4()
+
+    response = harness.client.post(
+        f"/runs/{origin}/replay-snapshot", json={"reason": "CHG-4 reproduce"}, headers=OPERATOR
+    )
+
+    assert response.status_code == 202, response.text
+    assert response.json()["execution"]["trigger_type"] == "SNAPSHOT_REPLAY"
+    ((execution_id, request),) = harness.repositories.snapshot_replays
+    assert execution_id == origin and request.requested_by == "budi"
+    refused = harness.client.post(f"/runs/{origin}/replay-snapshot", json={"reason": "CHG-4"}, headers=GUEST)
+    assert refused.status_code == 403

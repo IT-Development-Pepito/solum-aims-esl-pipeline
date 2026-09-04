@@ -85,6 +85,7 @@ class FakeRepositories:
     audit: list[dict[str, Any]] = field(default_factory=list)
     retries: list[tuple[UUID, RetryRequest]] = field(default_factory=list)
     replays: list[tuple[UUID, ReplayRequest]] = field(default_factory=list)
+    snapshot_replays: list[tuple[UUID, Any]] = field(default_factory=list)
 
     def launch_manual(self, launch: ManualLaunch, **fields: Any) -> FakeLaunchResult:
         execution = FakeExecution(
@@ -106,6 +107,10 @@ class FakeRepositories:
     ) -> FakeLaunchResult:
         self.replays.append((execution_id, request))
         return FakeLaunchResult(FakeExecution(uuid4(), trigger_type="REPLAY"))
+
+    def launch_snapshot_replay(self, execution_id: UUID, request: Any, **_: Any) -> FakeLaunchResult:
+        self.snapshot_replays.append((execution_id, request))
+        return FakeLaunchResult(FakeExecution(uuid4(), trigger_type="SNAPSHOT_REPLAY"))
 
     def schedules_for_scope(self, workflow_name: str, store_code: str | None) -> Sequence[FakeSchedule]:
         return [s for s in self.schedules if s.workflow_name == workflow_name]
@@ -545,3 +550,18 @@ def test_a_withheld_evidence_row_is_reported_with_its_own_exit_code(
     assert result.exit_code == cli_operations.EXIT_EVIDENCE_WITHHELD
     assert "Evidence withheld" in result.output
     assert "needle-value" not in result.output and "Traceback" not in result.output
+
+
+def test_runs_replay_snapshot_needs_only_a_reason_and_prints_the_trigger(
+    repositories: FakeRepositories,
+) -> None:
+    """#114: distinct from `runs replay`, which re-reads live sources over a given window."""
+
+    origin = uuid4()
+
+    result = runner.invoke(cli.app, ["runs", "replay-snapshot", str(origin), "--reason", "CHG-4 reproduce"])
+
+    assert result.exit_code == 0, result.output
+    assert "SNAPSHOT_REPLAY" in result.output
+    assert repositories.snapshot_replays[0][0] == origin
+    assert repositories.snapshot_replays[0][1].reason == "CHG-4 reproduce"

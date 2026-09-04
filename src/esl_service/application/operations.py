@@ -45,6 +45,7 @@ from esl_service.domain.operations import (
     InvalidWorkflowControl,
     ReplayRequest,
     RetryRequest,
+    SnapshotReplayRequest,
 )
 from esl_service.domain.outcomes import ExecutionMode
 from esl_service.domain.reconciliation import ReconciliationCounts, ReconciliationMode
@@ -100,6 +101,10 @@ class LaunchPort(Protocol):
 
     def launch_replay(
         self, execution_id: UUID, request: ReplayRequest, *, correlation_id: UUID
+    ) -> object: ...
+
+    def launch_snapshot_replay(
+        self, execution_id: UUID, request: SnapshotReplayRequest, *, correlation_id: UUID
     ) -> object: ...
 
 
@@ -290,6 +295,24 @@ class AuthorizedOperations:
         self._authorize(principal, Operation.REPLAY, str(execution_id))
         return self._launches.launch_replay(execution_id, request, correlation_id=correlation_id)
 
+    def replay_snapshot(
+        self, principal: Principal, execution_id: UUID, reason: str, *, correlation_id: UUID
+    ) -> object:
+        """Reproduce a run from its retained capture, reading no source (#114).
+
+        The same replay role applies, but no window is taken: the retained
+        capture's own window, configuration, and rule version are the input.
+        """
+
+        _require_reason(reason)
+        request = self._control(
+            SnapshotReplayRequest, requested_by=principal.identity, reason=reason
+        )
+        self._authorize(principal, Operation.REPLAY, str(execution_id))
+        return self._launches.launch_snapshot_replay(
+            execution_id, request, correlation_id=correlation_id
+        )
+
     def enable_schedule(self, principal: Principal, schedule_id: UUID, reason: str) -> object:
         return self._set_schedule(principal, schedule_id, reason, enabled=True)
 
@@ -387,7 +410,7 @@ class AuthorizedOperations:
         )
 
     @staticmethod
-    def _control[T: (RetryRequest, ReplayRequest)](kind: type[T], **fields: object) -> T:
+    def _control[T: (RetryRequest, ReplayRequest, SnapshotReplayRequest)](kind: type[T], **fields: object) -> T:
         """Build a domain control request, translating its refusal."""
 
         try:

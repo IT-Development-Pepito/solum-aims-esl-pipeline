@@ -15,6 +15,7 @@ from esl_service.domain.workflow import ExecutionStatus
 
 #: Refused controls are audit events even though no replacement run exists.
 WORKFLOW_RETRY_REFUSED = "workflow.retry.refused"
+WORKFLOW_SNAPSHOT_REPLAY_REFUSED = "workflow.snapshot_replay.refused"
 
 
 class InvalidWorkflowControl(ValueError):
@@ -99,6 +100,62 @@ def decide_retry(
     if has_unresolved_external_action:
         return RetryDecision(False, RetryRefusalReason.UNRESOLVED_EXTERNAL_ACTION)
     return RetryDecision(True, None)
+
+
+# --- snapshot replay (#114) ------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class SnapshotReplayRequest:
+    """An operator request to reproduce a run from its retained snapshot (#114).
+
+    Unlike ``ReplayRequest`` it carries no window: the replay reads nothing
+    live, so the original's window, configuration, and rule version apply.
+    """
+
+    requested_by: str
+    reason: str
+
+    def __post_init__(self) -> None:
+        _require_operator(self.requested_by, self.reason)
+
+
+class SnapshotReplayRefusalReason(StrEnum):
+    """Stable reason codes for a refused snapshot replay."""
+
+    #: The original's finalized SOURCE_EXPECTED capture no longer exists (purged, or never finalized).
+    SNAPSHOT_EVIDENCE_MISSING = "SNAPSHOT_EVIDENCE_MISSING"
+    #: The original's latest reconciliation report is absent or not finalized.
+    RECONCILIATION_UNRESOLVED = "RECONCILIATION_UNRESOLVED"
+
+
+@dataclass(frozen=True)
+class SnapshotReplayDecision:
+    allowed: bool
+    refusal: SnapshotReplayRefusalReason | None
+
+    def __post_init__(self) -> None:
+        if self.allowed and self.refusal is not None:
+            raise ValueError("an allowed snapshot replay has no refusal")
+        if not self.allowed and self.refusal is None:
+            raise ValueError("a refused snapshot replay must state a reason")
+
+
+def decide_snapshot_replay(
+    *, has_finalized_snapshot: bool, report_finalized: bool
+) -> SnapshotReplayDecision:
+    """Allow a replay only from retained, reconciled evidence.
+
+    Raw source rows are not retained (AD-005), so the finalized canonical
+    capture is the only input a replay can have; a run whose reconciliation
+    is still open is not a settled origin to reproduce.
+    """
+
+    if not has_finalized_snapshot:
+        return SnapshotReplayDecision(False, SnapshotReplayRefusalReason.SNAPSHOT_EVIDENCE_MISSING)
+    if not report_finalized:
+        return SnapshotReplayDecision(False, SnapshotReplayRefusalReason.RECONCILIATION_UNRESOLVED)
+    return SnapshotReplayDecision(True, None)
 
 
 @dataclass(frozen=True)

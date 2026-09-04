@@ -112,3 +112,42 @@ def test_execution_query_rejects_unbounded_or_invalid_filters(query: object) -> 
 
     with pytest.raises(InvalidExecutionQuery):
         query()  # type: ignore[operator]
+
+
+# --- snapshot replay (#114) -----------------------------------------------------
+
+
+@pytest.mark.parametrize("field", ["requested_by", "reason"])
+def test_snapshot_replay_requires_operator_identity_and_reason(field: str) -> None:
+    from esl_service.domain.operations import SnapshotReplayRequest
+
+    values = {"requested_by": "ops.alice", "reason": "INC-9 reproduce"}
+    values[field] = "  "
+
+    with pytest.raises(InvalidWorkflowControl, match=field):
+        SnapshotReplayRequest(**values)
+
+
+def test_a_snapshot_replay_needs_retained_evidence_and_a_finalized_report() -> None:
+    """#114: no raw rows are retained (AD-005), so only a finalized capture can be replayed,
+    and only once its reconciliation is final; otherwise the replay is refused by name."""
+
+    from esl_service.domain.operations import (
+        SnapshotReplayRefusalReason,
+        decide_snapshot_replay,
+    )
+
+    allowed = decide_snapshot_replay(has_finalized_snapshot=True, report_finalized=True)
+    purged = decide_snapshot_replay(has_finalized_snapshot=False, report_finalized=True)
+    unresolved = decide_snapshot_replay(has_finalized_snapshot=True, report_finalized=False)
+
+    assert allowed.allowed is True and allowed.refusal is None
+    assert purged.refusal is SnapshotReplayRefusalReason.SNAPSHOT_EVIDENCE_MISSING
+    assert unresolved.refusal is SnapshotReplayRefusalReason.RECONCILIATION_UNRESOLVED
+
+
+def test_snapshot_replay_is_its_own_trigger_type() -> None:
+    from esl_service.domain.outcomes import TriggerType
+
+    assert TriggerType.SNAPSHOT_REPLAY.value == "SNAPSHOT_REPLAY"
+    assert TriggerType.SNAPSHOT_REPLAY is not TriggerType.REPLAY
