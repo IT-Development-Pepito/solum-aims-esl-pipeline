@@ -27,6 +27,7 @@ from esl_service.application.operations import (
     InvalidOperationRequest,
 )
 from esl_service.application.run_evidence import (
+    EvidenceWithheld,
     IssueQuery,
     IssueRead,
     ReportQuery,
@@ -46,6 +47,8 @@ from esl_service.runtime.scheduler import LaunchContext
 
 #: A refused role is neither success nor an ordinary failure.
 EXIT_NOT_AUTHORIZED = 3
+#: Stored evidence carried a secret-like key and was withheld (NFR-009).
+EXIT_EVIDENCE_WITHHELD = 4
 
 
 class OperationsUnavailable(RuntimeError):
@@ -113,16 +116,6 @@ def _default_context() -> LaunchContext:
 _context: Callable[[], LaunchContext] = _default_context
 
 
-def _default_steps(execution_id: UUID) -> Sequence[object]:
-    from esl_service.runtime.host import execution_steps
-
-    return execution_steps(execution_id)
-
-
-#: The steps and checkpoints of one run (#102), for ``runs show``.
-_steps: Callable[[UUID], Sequence[object]] = _default_steps
-
-
 def _default_run_evidence() -> RunEvidenceService:
     from esl_service.runtime.host import build_run_evidence
 
@@ -156,6 +149,9 @@ def _run(action: Callable[[], object]) -> object:
     except NotAuthorized as error:
         typer.echo(f"Refused: {error}")
         raise typer.Exit(code=EXIT_NOT_AUTHORIZED) from None
+    except EvidenceWithheld as error:
+        typer.echo(f"Evidence withheld: {error}")
+        raise typer.Exit(code=EXIT_EVIDENCE_WITHHELD) from None
     except (
         InvalidOperationRequest,
         InvalidWorkflowControl,
@@ -266,16 +262,11 @@ def runs_start(
 def runs_show(execution_id: UUID) -> None:
     """Print one run by id."""
 
-    operations, principal = _service()
-    found = _run(lambda: operations.status(principal, ExecutionQuery(execution_id=execution_id)))
-    assert isinstance(found, list | tuple)
-    if not found:
-        typer.echo(f"Not found: no execution with id {execution_id}")
-        raise typer.Exit(code=1)
-    _print_execution(found[0])
-    evidence, evidence_principal = _evidence_service()
-    detail = _run(lambda: evidence.run_detail(evidence_principal, execution_id))
+    # One authorized read serves the row, the steps, and the recovery fields.
+    evidence, principal = _evidence_service()
+    detail = _run(lambda: evidence.run_detail(principal, execution_id))
     assert isinstance(detail, RunDetailRead)
+    _print_execution(detail.execution)
     _print_steps(detail.steps)
     _print_recovery(detail.recovery)
 
@@ -380,8 +371,12 @@ def runs_report(
         for row in result.exceptions:
             uom = row.selling_uom or "-"
             typer.echo(f"item: {row.store_code}/{row.item_code}/{uom}  {row.category}")
-            typer.echo(f"  computed: {json.dumps(row.expected_evidence, sort_keys=True)}")
-            typer.echo(f"  legacy_or_actual: {json.dumps(row.actual_evidence, sort_keys=True)}")
+            # A baseline exception is computed-versus-legacy; any other is expected-versus-actual.
+            left, right = (
+                ("computed", "legacy") if row.category.startswith("LEGACY_BASELINE_") else ("expected", "actual")
+            )
+            typer.echo(f"  {left}: {json.dumps(row.expected_evidence, sort_keys=True)}")
+            typer.echo(f"  {right}: {json.dumps(row.actual_evidence, sort_keys=True)}")
         typer.echo(
             f"exceptions: {len(result.exceptions)} of {result.total} "
             f"(limit {result.limit}, offset {result.offset})"

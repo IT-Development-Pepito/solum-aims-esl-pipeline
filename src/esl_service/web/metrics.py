@@ -22,14 +22,16 @@ def render_metrics(metrics: MetricsRead) -> tuple[bytes, str]:
         ("count_name", "store", "workflow"),
         registry=registry,
     )
+    # Gauges over a rolling window, so the names avoid the ``_sum``/``_count``
+    # suffixes that Prometheus reserves for Summary and Histogram children.
     duration_total = Gauge(
-        "esl_run_step_duration_seconds_sum",
+        "esl_run_step_duration_window_seconds",
         "Total completed step duration in the configured recent-run window.",
         ("step", "store", "workflow"),
         registry=registry,
     )
     duration_count = Gauge(
-        "esl_run_step_duration_seconds_count",
+        "esl_run_step_samples_window",
         "Completed step samples in the configured recent-run window.",
         ("step", "store", "workflow"),
         registry=registry,

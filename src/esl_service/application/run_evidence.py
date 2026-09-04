@@ -34,6 +34,15 @@ CANONICALIZE_COUNT_KEYS = (
 RECONCILIATION_COUNT_KEYS = tuple(field.name for field in fields(ReconciliationCounts))
 
 
+class EvidenceWithheld(RuntimeError):
+    """Stored evidence carried a secret-like key, so the read refused to show it.
+
+    The sanitizer fails closed by design (NFR-009); this names that outcome so
+    the API answers with a fixed message and the CLI with an exit code, never
+    a traceback, and never the offending value.
+    """
+
+
 @dataclass(frozen=True)
 class IssueQuery:
     code: str | None = None
@@ -84,6 +93,14 @@ class IssueGroup:
 
 
 @dataclass(frozen=True)
+class IssueSummary:
+    """Grouped counts and the total under one filter, computed by the port."""
+
+    groups: tuple[IssueGroup, ...]
+    total: int
+
+
+@dataclass(frozen=True)
 class IssueDetail:
     store_code: str
     item_code: str
@@ -119,19 +136,27 @@ class ReconciliationExceptionRow:
 
 @dataclass(frozen=True)
 class ReconciliationReportRow:
+    """The latest report revision's header and counts; exceptions are read by page."""
+
+    report_id: UUID
     revision: int
     mode: str
     status: str
     generated_at: datetime
     finalized_at: datetime | None
     counts: Mapping[str, int]
-    exceptions: tuple[ReconciliationExceptionRow, ...]
 
 
 @dataclass(frozen=True)
 class ExceptionGroup:
     category: str
     count: int
+
+
+@dataclass(frozen=True)
+class ExceptionSummary:
+    groups: tuple[ExceptionGroup, ...]
+    total: int
 
 
 @dataclass(frozen=True)
@@ -219,9 +244,11 @@ class RunDetailRead:
 
 @dataclass(frozen=True)
 class MetricRunRow:
+    """One recent run as the scrape sees it: counts only, no evidence rows."""
+
     workflow_name: str
     store_code: str
-    issues: Sequence[IssueEvidenceRow]
+    issues: Mapping[str, int]
     reconciliation_counts: Mapping[str, int]
     steps: Sequence[EvidenceStep]
 
@@ -266,11 +293,30 @@ class EvidenceAuthorizer(Protocol):
 
 
 class RunEvidencePort(Protocol):
-    def issues_for(self, execution_id: UUID) -> Sequence[IssueEvidenceRow]: ...
+    """What the persistence adapter answers; every method is bounded at the query.
+
+    A run can hold 15,000 records and 11,000 exceptions, so no method returns
+    a whole run: summaries are grouped counts, pages are ``limit``/``offset``,
+    and the metrics window carries counts per code, never evidence.
+    """
+
+    def execution_exists(self, execution_id: UUID) -> bool: ...
+
+    def issue_summary_for(self, execution_id: UUID, query: IssueQuery) -> IssueSummary: ...
+
+    def issue_page_for(
+        self, execution_id: UUID, query: IssueQuery
+    ) -> Sequence[IssueEvidenceRow]: ...
 
     def latest_report_for(
         self, execution_id: UUID
     ) -> ReconciliationReportRow | None: ...
+
+    def exception_summary_for(self, report_id: UUID, query: ReportQuery) -> ExceptionSummary: ...
+
+    def exception_page_for(
+        self, report_id: UUID, query: ReportQuery
+    ) -> Sequence[ReconciliationExceptionRow]: ...
 
     def run_evidence_for(self, execution_id: UUID) -> RunEvidenceRows: ...
 
@@ -302,22 +348,15 @@ class RunEvidenceService:
         query: IssueQuery | None = None,
     ) -> IssueRead:
         self._authorize(principal, str(execution_id))
-        selected = [row for row in self._evidence.issues_for(execution_id) if _issue_matches(row, query)]
-        selected.sort(key=_issue_sort_key)
+        self._require_execution(execution_id)
         effective = query or IssueQuery()
-        groups = Counter((row.issue_code, row.rule_id, row.severity) for row in selected)
-        summaries = tuple(
-            IssueGroup(code, rule, severity, count)
-            for (code, rule, severity), count in sorted(
-                groups.items(), key=lambda item: (-item[1], *item[0])
-            )
-        )
-        page = selected[effective.offset : effective.offset + effective.limit]
+        summary = self._evidence.issue_summary_for(execution_id, effective)
+        page = self._evidence.issue_page_for(execution_id, effective)
         return IssueRead(
             execution_id=execution_id,
-            groups=summaries,
+            groups=tuple(summary.groups),
             records=tuple(_issue_detail(row) for row in page),
-            total=len(selected),
+            total=summary.total,
             limit=effective.limit,
             offset=effective.offset,
         )
@@ -329,14 +368,14 @@ class RunEvidenceService:
         query: ReportQuery | None = None,
     ) -> ReportRead:
         self._authorize(principal, str(execution_id))
+        self._require_execution(execution_id)
         report = self._evidence.latest_report_for(execution_id)
         if report is None:
-            raise LookupError(f"no reconciliation report for execution {execution_id}")
+            # Distinct from an unknown id: the run exists but has not reconciled.
+            raise LookupError(f"execution {execution_id} has no reconciliation report yet")
         effective = query or ReportQuery()
-        selected = [row for row in report.exceptions if _exception_matches(row, effective)]
-        selected.sort(key=lambda row: row.sequence)
-        groups = Counter(row.category for row in selected)
-        page = selected[effective.offset : effective.offset + effective.limit]
+        summary = self._evidence.exception_summary_for(report.report_id, effective)
+        page = self._evidence.exception_page_for(report.report_id, effective)
         return ReportRead(
             execution_id=execution_id,
             revision=report.revision,
@@ -344,13 +383,10 @@ class RunEvidenceService:
             status=report.status,
             generated_at=report.generated_at,
             finalized_at=report.finalized_at,
-            counts={key: int(report.counts[key]) for key in RECONCILIATION_COUNT_KEYS},
-            groups=tuple(
-                ExceptionGroup(category, count)
-                for category, count in sorted(groups.items(), key=lambda item: (-item[1], item[0]))
-            ),
+            counts={key: int(report.counts.get(key, 0)) for key in RECONCILIATION_COUNT_KEYS},
+            groups=tuple(summary.groups),
             exceptions=tuple(_exception_detail(row) for row in page),
-            total=len(selected),
+            total=summary.total,
             limit=effective.limit,
             offset=effective.offset,
         )
@@ -375,8 +411,8 @@ class RunEvidenceService:
         duration_total: defaultdict[tuple[str, str, str], float] = defaultdict(float)
         duration_count: Counter[tuple[str, str, str]] = Counter()
         for run in rows:
-            for issue in run.issues:
-                issues[(run.workflow_name, run.store_code, issue.issue_code)] += 1
+            for issue_code, count in run.issues.items():
+                issues[(run.workflow_name, run.store_code, issue_code)] += int(count)
             for name in RECONCILIATION_COUNT_KEYS:
                 if name in run.reconciliation_counts:
                     reconciliation[(run.workflow_name, run.store_code, name)] += int(
@@ -404,26 +440,9 @@ class RunEvidenceService:
     def _authorize(self, principal: Principal, resource_key: str) -> None:
         self._authorizer.authorize(principal, Operation.STATUS, resource_key=resource_key)
 
-
-def _issue_matches(row: IssueEvidenceRow, query: IssueQuery | None) -> bool:
-    if query is None:
-        return True
-    return (
-        (query.code is None or row.issue_code.casefold() == query.code.casefold())
-        and (query.severity is None or row.severity.casefold() == query.severity.casefold())
-        and (query.item is None or row.item_code.casefold() == query.item.casefold())
-    )
-
-
-def _issue_sort_key(row: IssueEvidenceRow) -> tuple[str, str, str, str, str, bool]:
-    return (
-        row.store_code,
-        row.item_code,
-        row.selling_uom or "",
-        row.issue_code,
-        row.rule_id,
-        row.keyless,
-    )
+    def _require_execution(self, execution_id: UUID) -> None:
+        if not self._evidence.execution_exists(execution_id):
+            raise LookupError(f"no execution with id {execution_id}")
 
 
 def _issue_detail(row: IssueEvidenceRow) -> IssueDetail:
@@ -439,12 +458,6 @@ def _issue_detail(row: IssueEvidenceRow) -> IssueDetail:
         evidence,
         row.keyless,
     )
-
-
-def _exception_matches(row: ReconciliationExceptionRow, query: ReportQuery) -> bool:
-    return (
-        query.category is None or row.category.casefold() == query.category.casefold()
-    ) and (query.item is None or (row.item_code or "").casefold() == query.item.casefold())
 
 
 def _exception_detail(row: ReconciliationExceptionRow) -> ExceptionDetail:
@@ -463,7 +476,11 @@ def _exception_detail(row: ReconciliationExceptionRow) -> ExceptionDetail:
 def _safe_evidence(value: Mapping[str, object] | None) -> dict[str, JSONValue] | None:
     if value is None:
         return None
-    sanitized = sanitize_evidence(cast("JSONValue", dict(value)))
+    try:
+        sanitized = sanitize_evidence(cast("JSONValue", dict(value)))
+    except ValueError as error:
+        # The message names the key only, never the value (NFR-009).
+        raise EvidenceWithheld(f"evidence withheld: {error}") from None
     if not isinstance(sanitized, dict):
         raise TypeError("operator evidence must be an object")
     return sanitized
@@ -498,14 +515,17 @@ def _step_read(step: EvidenceStep) -> StepRead:
 
 
 __all__ = [
+    "EvidenceWithheld",
     "ExceptionDetail",
     "ExceptionGroup",
+    "ExceptionSummary",
     "IssueDetail",
     "IssueEvidenceRow",
     "IssueGroup",
     "IssueMetric",
     "IssueQuery",
     "IssueRead",
+    "IssueSummary",
     "MetricRunRow",
     "MetricsRead",
     "ReconciliationExceptionRow",

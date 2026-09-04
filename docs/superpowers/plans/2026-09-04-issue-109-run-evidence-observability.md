@@ -41,4 +41,3 @@
 - Commit, push, open a PR to `develop`, request cross-agent review, wait for required CI, merge, fast-forward local `develop`, and add the post-merge checkpoint.
 
 **Expected files:** `src/esl_service/application/run_evidence.py`, `src/esl_service/persistence/run_evidence_repository.py`, `src/esl_service/runtime/{host,cli_operations}.py`, `src/esl_service/web/{app,audit_schemas}.py`, `src/esl_service/config.py`, `.env.dev.example`, `.env.production.example`, `pyproject.toml`, focused unit/integration tests, `docs/WORKFLOW.md`, `docs/PROGRESS.md`, and new immutable checkpoint files.
-

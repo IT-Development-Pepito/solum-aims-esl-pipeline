@@ -8,4 +8,3 @@
 - **Configuration:** `ESL_METRICS_RUN_LIMIT` is non-secret, defaults to 20, and is bounded 1–1000. `prometheus-client` is a declared runtime dependency. No secret value was printed or committed.
 - **External state:** The dedicated test database was used only through rollback-protected integration fixtures. `npm ci` installed lockfile-pinned dependencies only in the ignored issue-worktree `frontend/node_modules`. No production PostgreSQL, SQL Server, AIMS, Hop, Jenkins, CSV delivery, or ESL device was touched.
 - **Risks / next action:** API shapes are now the #29 frontend contract. Prometheus aggregates are rolling-window gauges, so they show the current bounded window rather than lifetime monotonic counters. Next: commit, push, open the PR to `develop`, obtain independent review and required CI, then merge and synchronize root `develop`.
-

@@ -31,6 +31,7 @@ from esl_service.application.operations import (
     InvalidOperationRequest,
 )
 from esl_service.application.run_evidence import (
+    EvidenceWithheld,
     IssueQuery,
     ReportQuery,
     RunEvidenceService,
@@ -254,6 +255,11 @@ def create_app(
     @app.exception_handler(LookupError)
     def _missing(_: Request, error: LookupError) -> JSONResponse:
         return JSONResponse(status_code=404, content={"detail": str(error)})
+
+    @app.exception_handler(EvidenceWithheld)
+    def _withheld(_: Request, error: EvidenceWithheld) -> JSONResponse:
+        # Fails closed by design (NFR-009): a fixed message naming the key, never the value.
+        return JSONResponse(status_code=500, content={"detail": str(error)})
 
     # -- health, no token -------------------------------------------------------
 

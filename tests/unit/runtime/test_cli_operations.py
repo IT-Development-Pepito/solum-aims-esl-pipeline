@@ -20,7 +20,6 @@ from typer.testing import CliRunner
 from esl_service.application.operations import AuthorizedOperations
 from esl_service.application.run_evidence import (
     IssueEvidenceRow,
-    MetricRunRow,
     ReconciliationExceptionRow,
     ReconciliationReportRow,
     RunEvidenceRows,
@@ -33,6 +32,7 @@ from esl_service.domain.scheduling import ManualLaunch
 from esl_service.runtime import cli, cli_operations
 from esl_service.runtime.health import DependencyHealth, HealthService, HealthState
 from esl_service.runtime.scheduler import LaunchContext
+from tests.support.evidence import FakeEvidencePort
 
 runner = CliRunner()
 NOW = datetime(2026, 9, 2, 8, 0, tzinfo=UTC)
@@ -132,26 +132,22 @@ class FakeRepositories:
 
 
 @dataclass
-class FakeRunEvidencePort:
-    repositories: FakeRepositories
-    issues: tuple[IssueEvidenceRow, ...] = ()
-    report: ReconciliationReportRow | None = None
+class FakeRunEvidencePort(FakeEvidencePort):
+    repositories: FakeRepositories | None = None
     steps: dict[UUID, tuple[object, ...]] = field(default_factory=dict)
 
-    def issues_for(self, execution_id: UUID) -> tuple[IssueEvidenceRow, ...]:
-        return self.issues
+    def _execution(self, execution_id: UUID) -> object | None:
+        assert self.repositories is not None
+        return next((item for item in self.repositories.executions if item.id == execution_id), None)
 
-    def latest_report_for(self, execution_id: UUID) -> ReconciliationReportRow | None:
-        return self.report
+    def execution_exists(self, execution_id: UUID) -> bool:
+        return self._execution(execution_id) is not None
 
     def run_evidence_for(self, execution_id: UUID) -> RunEvidenceRows:
-        execution = next((item for item in self.repositories.executions if item.id == execution_id), None)
+        execution = self._execution(execution_id)
         if execution is None:
             raise LookupError(f"no execution with id {execution_id}")
         return RunEvidenceRows(execution, self.steps.get(execution_id, ()), ())
-
-    def metric_evidence(self, *, per_scope_limit: int) -> tuple[MetricRunRow, ...]:
-        return ()
 
 
 class HealthyProbe:
@@ -184,7 +180,7 @@ def repositories(monkeypatch: pytest.MonkeyPatch) -> FakeRepositories:
         clock=lambda: NOW,
     )
     monkeypatch.setattr(cli_operations, "_operations", lambda: operations)
-    evidence = FakeRunEvidencePort(repositories)
+    evidence = FakeRunEvidencePort(repositories=repositories)
     monkeypatch.setattr(
         cli_operations,
         "_run_evidence",
@@ -370,6 +366,7 @@ def test_runs_report_prints_counts_groups_and_legacy_values(
     (execution,) = repositories.executions
     evidence: FakeRunEvidencePort = repositories.run_evidence  # type: ignore[attr-defined]
     evidence.report = ReconciliationReportRow(
+        uuid4(),
         2,
         "SHADOW",
         "FINALIZED",
@@ -380,17 +377,20 @@ def test_runs_report_prints_counts_groups_and_legacy_values(
             "unchanged": 0, "skipped_idempotent": 0, "intended": 0, "acknowledged": 0,
             "rejected_by_aims": 0, "failed": 0, "unresolved": 1, "submitted": 0, "ambiguous": 1,
         },
-        (
-            ReconciliationExceptionRow(
-                4,
-                "LEGACY_BASELINE_MISMATCH",
-                "084",
-                "A",
-                "KGS",
-                {"source_regular_price": "50000"},
-                {"SALES_PRICE": "49000"},
-                "OPEN",
-            ),
+    )
+    evidence.exceptions = (
+        ReconciliationExceptionRow(
+            4,
+            "LEGACY_BASELINE_MISMATCH",
+            "084",
+            "A",
+            "KGS",
+            {"source_regular_price": "50000"},
+            {"SALES_PRICE": "49000"},
+            "OPEN",
+        ),
+        ReconciliationExceptionRow(
+            5, "UOM_RULE_REQUIRED", "084", "B", "PCS", None, {"source_uom": "BOX"}, "OPEN"
         ),
     )
 
@@ -403,7 +403,16 @@ def test_runs_report_prints_counts_groups_and_legacy_values(
     assert "revision: 2" in result.output and "unresolved: 1" in result.output
     assert "LEGACY_BASELINE_MISMATCH" in result.output
     assert 'computed: {"source_regular_price": "50000"}' in result.output
-    assert 'legacy_or_actual: {"SALES_PRICE": "49000"}' in result.output
+    assert 'legacy: {"SALES_PRICE": "49000"}' in result.output
+    assert "legacy_or_actual" not in result.output
+
+    other = runner.invoke(
+        cli.app, ["runs", "report", str(execution.id), "--category", "UOM_RULE_REQUIRED"]
+    )
+
+    assert other.exit_code == 0, other.output
+    assert "expected: null" in other.output and 'actual: {"source_uom": "BOX"}' in other.output
+    assert "computed:" not in other.output
 
 
 def test_runs_issues_is_operator_only_and_refusal_is_audited(
@@ -508,3 +517,31 @@ def test_a_service_that_cannot_be_built_is_reported_without_a_traceback(
     assert result.exit_code == 1
     assert "unreachable" in result.output
     assert "Traceback" not in result.output
+
+
+def test_runs_show_of_an_unknown_run_is_not_found_without_a_traceback(
+    repositories: FakeRepositories,
+) -> None:
+    result = runner.invoke(cli.app, ["runs", "show", str(uuid4())])
+
+    assert result.exit_code == 1
+    assert "Not found" in result.output and "Traceback" not in result.output
+
+
+def test_a_withheld_evidence_row_is_reported_with_its_own_exit_code(
+    repositories: FakeRepositories,
+) -> None:
+    """A stored secret-like key fails closed: named outcome, no value, no traceback."""
+
+    runner.invoke(cli.app, START)
+    (execution,) = repositories.executions
+    evidence: FakeRunEvidencePort = repositories.run_evidence  # type: ignore[attr-defined]
+    evidence.issues = (
+        IssueEvidenceRow("084", "A", "KGS", "BR-006", "BAD", "ERROR", {"db_password": "needle-value"}),
+    )
+
+    result = runner.invoke(cli.app, ["runs", "issues", str(execution.id), "--code", "BAD"])
+
+    assert result.exit_code == cli_operations.EXIT_EVIDENCE_WITHHELD
+    assert "Evidence withheld" in result.output
+    assert "needle-value" not in result.output and "Traceback" not in result.output

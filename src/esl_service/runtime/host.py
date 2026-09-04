@@ -37,9 +37,14 @@ from esl_service.application.contracts import (
 from esl_service.application.operations import AuthorizedOperations
 from esl_service.application.persist_run import PersistedRun, RunContext, persist_run
 from esl_service.application.run_evidence import (
+    ExceptionSummary,
     IssueEvidenceRow,
+    IssueQuery,
+    IssueSummary,
     MetricRunRow,
+    ReconciliationExceptionRow,
     ReconciliationReportRow,
+    ReportQuery,
     RunEvidenceRows,
     RunEvidenceService,
 )
@@ -162,16 +167,32 @@ class TransactionalPorts:
         with self._scope() as session:
             return ExecutionRepository(session).query_executions(query)
 
-    # RunEvidencePort (#109)
-    def issues_for(self, execution_id: UUID) -> Sequence[IssueEvidenceRow]:
+    # RunEvidencePort (#109): every read bounded in SQL, one transaction each
+    def execution_exists(self, execution_id: UUID) -> bool:
         with self._scope() as session:
-            return RunEvidenceRepository(session).issues_for(execution_id)
+            return RunEvidenceRepository(session).execution_exists(execution_id)
 
-    def latest_report_for(
-        self, execution_id: UUID
-    ) -> ReconciliationReportRow | None:
+    def issue_summary_for(self, execution_id: UUID, query: IssueQuery) -> IssueSummary:
+        with self._scope() as session:
+            return RunEvidenceRepository(session).issue_summary_for(execution_id, query)
+
+    def issue_page_for(self, execution_id: UUID, query: IssueQuery) -> Sequence[IssueEvidenceRow]:
+        with self._scope() as session:
+            return RunEvidenceRepository(session).issue_page_for(execution_id, query)
+
+    def latest_report_for(self, execution_id: UUID) -> ReconciliationReportRow | None:
         with self._scope() as session:
             return RunEvidenceRepository(session).latest_report_for(execution_id)
+
+    def exception_summary_for(self, report_id: UUID, query: ReportQuery) -> ExceptionSummary:
+        with self._scope() as session:
+            return RunEvidenceRepository(session).exception_summary_for(report_id, query)
+
+    def exception_page_for(
+        self, report_id: UUID, query: ReportQuery
+    ) -> Sequence[ReconciliationExceptionRow]:
+        with self._scope() as session:
+            return RunEvidenceRepository(session).exception_page_for(report_id, query)
 
     def run_evidence_for(self, execution_id: UUID) -> RunEvidenceRows:
         with self._scope() as session:
@@ -179,9 +200,7 @@ class TransactionalPorts:
 
     def metric_evidence(self, *, per_scope_limit: int) -> Sequence[MetricRunRow]:
         with self._scope() as session:
-            return RunEvidenceRepository(session).metric_evidence(
-                per_scope_limit=per_scope_limit
-            )
+            return RunEvidenceRepository(session).metric_evidence(per_scope_limit=per_scope_limit)
 
     # ReconciliationPort
     def finalize_report(
@@ -285,26 +304,26 @@ def launch_context(settings: Settings | None = None) -> LaunchContext:
     )
 
 
-def build_operations(settings: Settings | None = None) -> AuthorizedOperations:
-    settings = settings or load_settings()
-    ports = TransactionalPorts(_session_factory(settings))
+def _authorized_operations(ports: TransactionalPorts) -> AuthorizedOperations:
     return AuthorizedOperations(
         launches=ports, schedules=ports, status=ports, reconciliation=ports, audit=ports
     )
 
 
-def build_run_evidence(settings: Settings | None = None) -> RunEvidenceService:
+def build_operations(settings: Settings | None = None) -> AuthorizedOperations:
     settings = settings or load_settings()
-    ports = TransactionalPorts(_session_factory(settings))
-    operations = AuthorizedOperations(
-        launches=ports,
-        schedules=ports,
-        status=ports,
-        reconciliation=ports,
-        audit=ports,
-    )
+    return _authorized_operations(TransactionalPorts(_session_factory(settings)))
+
+
+def build_run_evidence(
+    settings: Settings | None = None, *, ports: TransactionalPorts | None = None
+) -> RunEvidenceService:
+    """The #109 read service; pass ``ports`` to share one engine with the operations service."""
+
+    settings = settings or load_settings()
+    ports = ports or TransactionalPorts(_session_factory(settings))
     return RunEvidenceService(
-        operations,
+        _authorized_operations(ports),
         ports,
         clock=lambda: datetime.now(UTC),
         metrics_run_limit=settings.metrics_run_limit,
@@ -563,10 +582,3 @@ def build_worker(settings: Settings | None = None) -> WorkerLoop:
         interval_seconds=WORKER_INTERVAL_SECONDS,
         on_start=runner.recover_all,
     )
-
-
-def execution_steps(execution_id: UUID, settings: Settings | None = None) -> Sequence[Any]:
-    """The steps and checkpoints of one run, for ``runs show``."""
-
-    settings = settings or load_settings()
-    return RunnerPorts(_session_factory(settings)).step_history(execution_id)

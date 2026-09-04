@@ -7,6 +7,7 @@ from uuid import UUID, uuid4
 import pytest
 
 from esl_service.application.run_evidence import (
+    EvidenceWithheld,
     IssueEvidenceRow,
     IssueQuery,
     MetricRunRow,
@@ -17,9 +18,12 @@ from esl_service.application.run_evidence import (
     RunEvidenceService,
 )
 from esl_service.domain.authorization import Operation, Principal, Role
+from tests.support.evidence import FakeEvidencePort as EvidencePort
+from tests.support.evidence import issue_counts
 
 NOW = datetime(2026, 9, 4, 1, 0, tzinfo=UTC)
 EXECUTION_ID = uuid4()
+REPORT_ID = uuid4()
 
 
 @dataclass(frozen=True)
@@ -60,33 +64,6 @@ class Authorizer:
         self.calls.append((principal.identity, operation, resource_key))
 
 
-@dataclass
-class EvidencePort:
-    issue_rows: tuple[IssueEvidenceRow, ...] = ()
-    report_row: ReconciliationReportRow | None = None
-    run_rows: RunEvidenceRows | None = None
-    metric_rows: tuple[MetricRunRow, ...] = ()
-    metric_limit: int | None = None
-
-    def issues_for(self, execution_id: UUID) -> tuple[IssueEvidenceRow, ...]:
-        assert execution_id == EXECUTION_ID
-        return self.issue_rows
-
-    def latest_report_for(self, execution_id: UUID) -> ReconciliationReportRow | None:
-        assert execution_id == EXECUTION_ID
-        return self.report_row
-
-    def run_evidence_for(self, execution_id: UUID) -> RunEvidenceRows:
-        assert execution_id == EXECUTION_ID
-        if self.run_rows is None:
-            raise LookupError(f"no execution with id {execution_id}")
-        return self.run_rows
-
-    def metric_evidence(self, *, per_scope_limit: int) -> tuple[MetricRunRow, ...]:
-        self.metric_limit = per_scope_limit
-        return self.metric_rows
-
-
 OPERATOR = Principal("budi", frozenset({Role.OPERATOR}))
 
 
@@ -114,6 +91,7 @@ def issue(
 
 def service(port: EvidencePort) -> tuple[RunEvidenceService, Authorizer]:
     authorizer = Authorizer()
+    port.known_executions.add(EXECUTION_ID)
     return RunEvidenceService(authorizer, port, clock=lambda: NOW, metrics_run_limit=20), authorizer
 
 
@@ -121,7 +99,7 @@ def test_issue_summary_groups_before_stable_drilldown_pagination() -> None:
     """Removing grouping or applying pagination first would undercount a code."""
 
     port = EvidencePort(
-        issue_rows=(
+        issues=(
             issue("200", "UOM_RULE_REQUIRED"),
             issue("100", "UOM_RULE_REQUIRED"),
             issue(
@@ -153,7 +131,7 @@ def test_issue_filters_are_shared_by_summary_and_drilldown() -> None:
     """Ignoring code/severity/item filters would make CLI and API counts disagree."""
 
     port = EvidencePort(
-        issue_rows=(
+        issues=(
             issue("100", "UOM_RULE_REQUIRED"),
             issue("100", "MISSING_PRICE", rule_id="BR-005", severity="WARNING"),
             issue("200", "UOM_RULE_REQUIRED"),
@@ -175,10 +153,10 @@ def test_issue_filters_are_shared_by_summary_and_drilldown() -> None:
 def test_issue_evidence_fails_closed_on_a_secret_like_key() -> None:
     """A stored credential-shaped key must never be returned by an operator read."""
 
-    port = EvidencePort(issue_rows=(issue("100", "BAD", evidence={"api_token": "needle"}),))
+    port = EvidencePort(issues=(issue("100", "BAD", evidence={"api_token": "needle"}),))
     evidence, _ = service(port)
 
-    with pytest.raises(ValueError, match="forbidden evidence key"):
+    with pytest.raises(EvidenceWithheld, match="forbidden evidence key"):
         evidence.issues(OPERATOR, EXECUTION_ID)
 
 
@@ -212,27 +190,28 @@ def test_latest_report_groups_filtered_exceptions_and_keeps_legacy_values_side_b
         resolution_status="OPEN",
     )
     port = EvidencePort(
-        report_row=ReconciliationReportRow(
+        report=ReconciliationReportRow(
+            report_id=REPORT_ID,
             revision=2,
             mode="SHADOW",
             status="FINALIZED",
             generated_at=NOW,
             finalized_at=NOW,
             counts=counts,
-            exceptions=(
-                ReconciliationExceptionRow(
-                    sequence=2,
-                    category="UOM_RULE_REQUIRED",
-                    store_code="084",
-                    item_code="200",
-                    selling_uom="PCS",
-                    expected_evidence=None,
-                    actual_evidence={"source_uom": "BOX"},
-                    resolution_status="OPEN",
-                ),
-                legacy,
+        ),
+        exceptions=(
+            ReconciliationExceptionRow(
+                sequence=2,
+                category="UOM_RULE_REQUIRED",
+                store_code="084",
+                item_code="200",
+                selling_uom="PCS",
+                expected_evidence=None,
+                actual_evidence={"source_uom": "BOX"},
+                resolution_status="OPEN",
             ),
-        )
+            legacy,
+        ),
     )
     evidence, _ = service(port)
 
@@ -279,7 +258,7 @@ def test_run_detail_derives_duration_counts_and_the_four_field_recovery_report()
             ),
         ),
     )
-    port = EvidencePort(run_rows=RunEvidenceRows(execution=execution, steps=steps, uncertain_actions=()))
+    port = EvidencePort(run_rows={EXECUTION_ID: RunEvidenceRows(execution=execution, steps=steps, uncertain_actions=())})
     evidence, _ = service(port)
 
     result = evidence.run_detail(OPERATOR, EXECUTION_ID)
@@ -307,18 +286,18 @@ def test_metrics_aggregate_the_configured_run_window_without_execution_labels() 
         Step("canonicalize", 1, "SUCCEEDED", None, NOW, NOW + timedelta(seconds=2)),
     )
     port = EvidencePort(
-        metric_rows=(
+        metrics=(
             MetricRunRow(
                 workflow_name="esl-refresh",
                 store_code="084",
-                issues=(issue("100", "UOM_RULE_REQUIRED"),),
+                issues=issue_counts((issue("100", "UOM_RULE_REQUIRED"),)),
                 reconciliation_counts={"unresolved": 1},
                 steps=steps,
             ),
             MetricRunRow(
                 workflow_name="esl-refresh",
                 store_code="084",
-                issues=(issue("200", "UOM_RULE_REQUIRED"), issue("300", "MISSING_PRICE")),
+                issues=issue_counts((issue("200", "UOM_RULE_REQUIRED"), issue("300", "MISSING_PRICE"))),
                 reconciliation_counts={"unresolved": 2},
                 steps=steps,
             ),
@@ -339,3 +318,55 @@ def test_metrics_aggregate_the_configured_run_window_without_execution_labels() 
     ]
     assert "execution" not in str(result).lower()
 
+
+def test_an_unknown_execution_is_a_lookup_error_not_an_empty_success() -> None:
+    """The #29 UI must tell a wrong id from a clean run."""
+
+    evidence, _ = service(EvidencePort())
+
+    with pytest.raises(LookupError, match="no execution with id"):
+        evidence.issues(OPERATOR, uuid4())
+    with pytest.raises(LookupError, match="no execution with id"):
+        evidence.report(OPERATOR, uuid4())
+
+
+def test_a_run_without_a_report_yet_is_named_as_such() -> None:
+    evidence, _ = service(EvidencePort())
+
+    with pytest.raises(LookupError, match="has no reconciliation report yet"):
+        evidence.report(OPERATOR, EXECUTION_ID)
+
+
+def test_an_offset_past_the_end_is_an_empty_page_with_the_true_total() -> None:
+    evidence, _ = service(EvidencePort(issues=(issue("100", "A"), issue("200", "A"))))
+
+    result = evidence.issues(OPERATOR, EXECUTION_ID, IssueQuery(limit=10, offset=5))
+
+    assert result.records == () and result.total == 2 and result.offset == 5
+
+
+def test_report_counts_tolerate_a_partial_mapping_from_the_port() -> None:
+    """The port is a Protocol; a missing count is zero, not a KeyError."""
+
+    port = EvidencePort(
+        report=ReconciliationReportRow(REPORT_ID, 1, "SHADOW", "FINALIZED", NOW, NOW, {"extracted": 5})
+    )
+    evidence, _ = service(port)
+
+    result = evidence.report(OPERATOR, EXECUTION_ID)
+
+    assert result.counts["extracted"] == 5 and result.counts["ambiguous"] == 0
+
+
+def test_exception_evidence_fails_closed_on_a_secret_like_key() -> None:
+    port = EvidencePort(
+        report=ReconciliationReportRow(REPORT_ID, 1, "SHADOW", "FINALIZED", NOW, NOW, {}),
+        exceptions=(
+            ReconciliationExceptionRow(1, "X", "084", "A", None, None, {"db_password": "needle"}, "OPEN"),
+        ),
+    )
+    evidence, _ = service(port)
+
+    with pytest.raises(EvidenceWithheld) as withheld:
+        evidence.report(OPERATOR, EXECUTION_ID, ReportQuery(category="X"))
+    assert "needle" not in str(withheld.value)
