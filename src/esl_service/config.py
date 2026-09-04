@@ -466,6 +466,11 @@ class Settings(BaseSettings):
     # psycopg waited past 40 s per attempt. Provisional (NFR-004); the SQL
     # Server helpers use the same 10 s.
     aims_connect_timeout_seconds: int = Field(default=10, ge=1, le=300)
+    # The Dashboard service that owns the page-change operation (#23, AD-021).
+    # A different host and port from the AIMS databases above; the base URL is
+    # a location, never a secret, and the vendor declares no auth scheme.
+    aims_dashboard_base_url: str = ""
+    aims_dashboard_timeout_seconds: int = Field(default=30, ge=1, le=300)
     aims_portal_database: str = ""
     aims_portal_username: str = ""
     aims_core_database: str = ""

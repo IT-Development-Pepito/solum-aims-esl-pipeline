@@ -78,7 +78,12 @@ _LEGACY_UOM_ALIASES = {"/100GR": "KGS"}
 
 
 class ActiveModeUnsupported(RuntimeError):
-    """Raised until the AIMS mutation adapter (#23) exists: only shadow runs persist."""
+    """Raised while ACTIVE mode is gated: only shadow runs persist.
+
+    The #23 adapter exists and is contract-tested, but AD-021 keeps ACTIVE
+    refused until one controlled live call settles which page field the
+    endpoint drives; the submission path is wired only after that.
+    """
 
 
 class PersistInterrupted(RuntimeError):
@@ -269,7 +274,8 @@ def persist_run(
 
     if context.mode is not ExecutionMode.SHADOW:
         raise ActiveModeUnsupported(
-            "only SHADOW runs can be persisted until the AIMS mutation adapter (#23) exists"
+            "only SHADOW runs can be persisted: ACTIVE stays refused until one "
+            "controlled live page change settles the endpoint's semantics (#23, AD-021)"
         )
 
     existing = snapshots.find_snapshot_set(context.execution_id, REPRESENTATION_SOURCE_EXPECTED)
