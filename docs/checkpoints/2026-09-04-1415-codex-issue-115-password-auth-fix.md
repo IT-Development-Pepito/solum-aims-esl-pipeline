@@ -1,0 +1,10 @@
+# Checkpoint: #115 Linux credential-fault test correction
+
+- **Timestamp / owner:** 2026-09-04 14:15 +08:00; Codex.
+- **Issue:** GitHub #115, `[ci] add a database-verify job that migrates and runs the integration suite on Linux`; assigned to `it20pepito`; labels `type:chore`, `area:ci`, `priority:p2`.
+- **Git state:** `codex/115-linux-database-verify`, worktree `.worktrees/issue-115-linux-database-verify`; PR #123 head is `d00650e` with one uncommitted authentication correction, focused test update, and this checkpoint.
+- **Scope:** NFR-016 only. The CI PostgreSQL service now uses `POSTGRES_PASSWORD: ${{ github.run_id }}` and both dedicated-test URLs use the same non-secret, job-unique value. `POSTGRES_HOST_AUTH_METHOD: trust` is removed. This is ephemeral job configuration: no production credential, GitHub secret, `.env`, or secret-store entry is added.
+- **Evidence:** **VERIFIED from the corrected GitHub Actions log:** Alembic succeeded; 181 integration/graph tests started; one failed because the existing wrong-password probe observed `REACHABLE` under trust authentication instead of `CREDENTIAL_REJECTED`. The failure is expected under trust and demonstrates that the suite verifies the authentication boundary. TDD RED: the focused configuration test failed requiring `POSTGRES_PASSWORD: ${{ github.run_id }}`. GREEN: it passed (2 passed), with Ruff clean.
+- **Configuration:** `${{ github.run_id }}` is non-secret GitHub job metadata, reused only inside the isolated service and test URLs. It is a password for that temporary PostgreSQL instance and disappears with the job.
+- **External state:** GitHub PR #123 and its CI service only; no production, SQL Server, AIMS, filesystem delivery, or ESL device effect.
+- **Risks / next action:** Run the full local gate, commit and push the focused correction, then verify the new GitHub `database-verify` run before review. The Development-sidebar issue link remains a manual GitHub UI step because the browser integration is unavailable on this host.
