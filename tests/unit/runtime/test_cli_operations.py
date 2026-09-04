@@ -10,7 +10,7 @@ test touches a database or the Windows API.
 
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -18,6 +18,13 @@ import pytest
 from typer.testing import CliRunner
 
 from esl_service.application.operations import AuthorizedOperations
+from esl_service.application.run_evidence import (
+    IssueEvidenceRow,
+    ReconciliationExceptionRow,
+    ReconciliationReportRow,
+    RunEvidenceRows,
+    RunEvidenceService,
+)
 from esl_service.domain.authorization import OPERATION_REFUSED, Principal, Role
 from esl_service.domain.operations import ExecutionQuery, ReplayRequest, RetryRequest
 from esl_service.domain.outcomes import ExecutionMode
@@ -25,6 +32,7 @@ from esl_service.domain.scheduling import ManualLaunch
 from esl_service.runtime import cli, cli_operations
 from esl_service.runtime.health import DependencyHealth, HealthService, HealthState
 from esl_service.runtime.scheduler import LaunchContext
+from tests.support.evidence import FakeEvidencePort
 
 runner = CliRunner()
 NOW = datetime(2026, 9, 2, 8, 0, tzinfo=UTC)
@@ -50,6 +58,7 @@ class FakeExecution:
     ended_at: datetime | None = None
     status: str = "QUEUED"
     terminal_reason: str | None = None
+    retry_not_before: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -122,6 +131,25 @@ class FakeRepositories:
         return fields
 
 
+@dataclass
+class FakeRunEvidencePort(FakeEvidencePort):
+    repositories: FakeRepositories | None = None
+    steps: dict[UUID, tuple[object, ...]] = field(default_factory=dict)
+
+    def _execution(self, execution_id: UUID) -> object | None:
+        assert self.repositories is not None
+        return next((item for item in self.repositories.executions if item.id == execution_id), None)
+
+    def execution_exists(self, execution_id: UUID) -> bool:
+        return self._execution(execution_id) is not None
+
+    def run_evidence_for(self, execution_id: UUID) -> RunEvidenceRows:
+        execution = self._execution(execution_id)
+        if execution is None:
+            raise LookupError(f"no execution with id {execution_id}")
+        return RunEvidenceRows(execution, self.steps.get(execution_id, ()), ())
+
+
 class HealthyProbe:
     name = "state_store"
     required = True
@@ -152,6 +180,15 @@ def repositories(monkeypatch: pytest.MonkeyPatch) -> FakeRepositories:
         clock=lambda: NOW,
     )
     monkeypatch.setattr(cli_operations, "_operations", lambda: operations)
+    evidence = FakeRunEvidencePort(repositories=repositories)
+    monkeypatch.setattr(
+        cli_operations,
+        "_run_evidence",
+        lambda: RunEvidenceService(
+            operations, evidence, clock=lambda: NOW, metrics_run_limit=20
+        ),
+    )
+    monkeypatch.setattr(repositories, "run_evidence", evidence, raising=False)
     monkeypatch.setattr(cli_operations, "_principal", lambda: OPERATOR)
     monkeypatch.setattr(cli_operations, "_health", lambda: HealthService([HealthyProbe()]))
     monkeypatch.setattr(
@@ -272,17 +309,16 @@ def test_runs_show_reports_the_steps_and_their_last_checkpoint(
         attempt: int
         outcome: str
         failure_class: str | None
+        started_at: datetime
+        ended_at: datetime | None
         checkpoints: tuple[Checkpoint, ...]
 
     runner.invoke(cli.app, START)
     (execution,) = repositories.executions
-    monkeypatch.setattr(
-        cli_operations,
-        "_steps",
-        lambda execution_id: (
-            Step("discover", 1, "SUCCEEDED", None, (Checkpoint("discover:done", "084", {"store_code": "084"}),)),
-            Step("read-store", 2, "FAILED", "RETRYABLE", ()),
-        ),
+    evidence: FakeRunEvidencePort = repositories.run_evidence  # type: ignore[attr-defined]
+    evidence.steps[execution.id] = (
+        Step("discover", 1, "SUCCEEDED", None, NOW, NOW + timedelta(seconds=1), (Checkpoint("discover:done", "084", {"store_code": "084"}),)),
+        Step("read-store", 2, "FAILED", "RETRYABLE", NOW, NOW + timedelta(seconds=2), ()),
     )
 
     result = runner.invoke(cli.app, ["runs", "show", str(execution.id)])
@@ -291,6 +327,105 @@ def test_runs_show_reports_the_steps_and_their_last_checkpoint(
     assert "discover" in result.output and "SUCCEEDED" in result.output
     assert "read-store" in result.output and "attempt 2" in result.output and "RETRYABLE" in result.output
     assert "discover:done" in result.output
+    assert "duration_seconds: 2.0" in result.output
+    assert "recovery_scope: esl-refresh:084" in result.output
+
+
+def test_runs_issues_prints_grouped_counts_and_filtered_record_evidence(
+    repositories: FakeRepositories,
+) -> None:
+    """A missing CLI drilldown would force an operator back to SQL."""
+
+    runner.invoke(cli.app, START)
+    (execution,) = repositories.executions
+    evidence: FakeRunEvidencePort = repositories.run_evidence  # type: ignore[attr-defined]
+    evidence.issues = (
+        IssueEvidenceRow("084", "A", "KGS", "BR-006", "MISSING_PRICE", "ERROR", {"price_category": "001"}),
+        IssueEvidenceRow("084", "B", None, "BR-002", "ITEM_INACTIVE", "WARNING", {"status": "C"}, True),
+    )
+
+    result = runner.invoke(
+        cli.app,
+        ["runs", "issues", str(execution.id), "--code", "MISSING_PRICE", "--item", "A"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "MISSING_PRICE" in result.output and "BR-006" in result.output
+    assert "count: 1" in result.output
+    assert "item: 084/A/KGS" in result.output
+    assert 'evidence: {"price_category": "001"}' in result.output
+    assert "ITEM_INACTIVE" not in result.output
+
+
+def test_runs_report_prints_counts_groups_and_legacy_values(
+    repositories: FakeRepositories,
+) -> None:
+    """Dropping computed or legacy evidence makes a baseline mismatch unactionable."""
+
+    runner.invoke(cli.app, START)
+    (execution,) = repositories.executions
+    evidence: FakeRunEvidencePort = repositories.run_evidence  # type: ignore[attr-defined]
+    evidence.report = ReconciliationReportRow(
+        uuid4(),
+        2,
+        "SHADOW",
+        "FINALIZED",
+        NOW,
+        NOW,
+        {
+            "extracted": 1, "rejected": 0, "valid": 1, "ineligible": 0, "eligible": 1,
+            "unchanged": 0, "skipped_idempotent": 0, "intended": 0, "acknowledged": 0,
+            "rejected_by_aims": 0, "failed": 0, "unresolved": 1, "submitted": 0, "ambiguous": 1,
+        },
+    )
+    evidence.exceptions = (
+        ReconciliationExceptionRow(
+            4,
+            "LEGACY_BASELINE_MISMATCH",
+            "084",
+            "A",
+            "KGS",
+            {"source_regular_price": "50000"},
+            {"SALES_PRICE": "49000"},
+            "OPEN",
+        ),
+        ReconciliationExceptionRow(
+            5, "UOM_RULE_REQUIRED", "084", "B", "PCS", None, {"source_uom": "BOX"}, "OPEN"
+        ),
+    )
+
+    result = runner.invoke(
+        cli.app,
+        ["runs", "report", str(execution.id), "--category", "LEGACY_BASELINE_MISMATCH"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "revision: 2" in result.output and "unresolved: 1" in result.output
+    assert "LEGACY_BASELINE_MISMATCH" in result.output
+    assert 'computed: {"source_regular_price": "50000"}' in result.output
+    assert 'legacy: {"SALES_PRICE": "49000"}' in result.output
+    assert "legacy_or_actual" not in result.output
+
+    other = runner.invoke(
+        cli.app, ["runs", "report", str(execution.id), "--category", "UOM_RULE_REQUIRED"]
+    )
+
+    assert other.exit_code == 0, other.output
+    assert "expected: null" in other.output and 'actual: {"source_uom": "BOX"}' in other.output
+    assert "computed:" not in other.output
+
+
+def test_runs_issues_is_operator_only_and_refusal_is_audited(
+    repositories: FakeRepositories, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner.invoke(cli.app, START)
+    (execution,) = repositories.executions
+    as_principal(monkeypatch, GUEST)
+
+    result = runner.invoke(cli.app, ["runs", "issues", str(execution.id)])
+
+    assert result.exit_code == cli_operations.EXIT_NOT_AUTHORIZED
+    assert repositories.audit[-1]["action"] == OPERATION_REFUSED
 
 
 def test_runs_list_filters_by_store(repositories: FakeRepositories) -> None:
@@ -382,3 +517,31 @@ def test_a_service_that_cannot_be_built_is_reported_without_a_traceback(
     assert result.exit_code == 1
     assert "unreachable" in result.output
     assert "Traceback" not in result.output
+
+
+def test_runs_show_of_an_unknown_run_is_not_found_without_a_traceback(
+    repositories: FakeRepositories,
+) -> None:
+    result = runner.invoke(cli.app, ["runs", "show", str(uuid4())])
+
+    assert result.exit_code == 1
+    assert "Not found" in result.output and "Traceback" not in result.output
+
+
+def test_a_withheld_evidence_row_is_reported_with_its_own_exit_code(
+    repositories: FakeRepositories,
+) -> None:
+    """A stored secret-like key fails closed: named outcome, no value, no traceback."""
+
+    runner.invoke(cli.app, START)
+    (execution,) = repositories.executions
+    evidence: FakeRunEvidencePort = repositories.run_evidence  # type: ignore[attr-defined]
+    evidence.issues = (
+        IssueEvidenceRow("084", "A", "KGS", "BR-006", "BAD", "ERROR", {"db_password": "needle-value"}),
+    )
+
+    result = runner.invoke(cli.app, ["runs", "issues", str(execution.id), "--code", "BAD"])
+
+    assert result.exit_code == cli_operations.EXIT_EVIDENCE_WITHHELD
+    assert "Evidence withheld" in result.output
+    assert "needle-value" not in result.output and "Traceback" not in result.output

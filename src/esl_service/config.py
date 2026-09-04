@@ -409,6 +409,9 @@ class Settings(BaseSettings):
     internal_host: str
     # The internal API listener binds to internal_host on this port only (#28).
     internal_port: int = Field(default=8000, ge=1, le=65535)
+    # #109 trend metrics include only the newest N runs of each workflow/store
+    # scope, preventing unbounded queries and execution-id label cardinality.
+    metrics_run_limit: int = Field(default=20, ge=1, le=1000)
     shadow_mode: bool = True
     secret_bundle_path: Path = Path(r"C:\ProgramData\SOLUM\ESL\secrets.dpapi")
     # Retention durations are UNKNOWN / NEEDS-DISCOVERY, so none is defaulted.

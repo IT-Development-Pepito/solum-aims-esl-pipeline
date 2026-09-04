@@ -13,8 +13,11 @@ import pytest
 from esl_service.web.audit_schemas import (
     ExecutionAuditResponse,
     ExecutionEventSummary,
+    ReconciliationExceptionResponse,
     RecordEvidenceResponse,
     RecordIssueSummary,
+    RunIssueDetailResponse,
+    StepEvidenceResponse,
 )
 
 NOW = datetime(2026, 8, 28, 7, 0, tzinfo=UTC)
@@ -125,6 +128,63 @@ def test_unknown_field_is_rejected_rather_than_passed_through() -> None:
     with pytest.raises(ValidationError):
         ExecutionAuditResponse.model_validate(
             execution_payload(secret_bundle_path="C:/ProgramData/secrets.dpapi")
+        )
+
+
+def test_run_issue_response_rejects_extra_fields_and_secret_evidence() -> None:
+    """A JSONB column or credential-shaped evidence key must fail closed."""
+
+    from pydantic import ValidationError
+
+    values = {
+        "store_code": "084",
+        "item_code": "A",
+        "selling_uom": "KGS",
+        "rule_id": "BR-006",
+        "issue_code": "MISSING_PRICE",
+        "severity": "ERROR",
+        "evidence": {"price_category": "001"},
+        "keyless": False,
+    }
+    with pytest.raises(ValidationError):
+        RunIssueDetailResponse.model_validate({**values, "raw_payload": {"x": 1}})
+    with pytest.raises(ValidationError, match="forbidden evidence key"):
+        RunIssueDetailResponse.model_validate({**values, "evidence": {"api_token": "needle"}})
+
+
+def test_reconciliation_and_step_responses_reject_unmodelled_payloads() -> None:
+    """Neither exception nor checkpoint JSONB may pass through by accident."""
+
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError, match="forbidden evidence key"):
+        ReconciliationExceptionResponse.model_validate(
+            {
+                "sequence": 1,
+                "category": "LEGACY_BASELINE_MISMATCH",
+                "store_code": "084",
+                "item_code": "A",
+                "selling_uom": "KGS",
+                "expected_evidence": {"database_url": "needle"},
+                "actual_evidence": None,
+                "resolution_status": "OPEN",
+            }
+        )
+    with pytest.raises(ValidationError):
+        StepEvidenceResponse.model_validate(
+            {
+                "step_name": "canonicalize",
+                "attempt": 1,
+                "outcome": "SUCCEEDED",
+                "failure_class": None,
+                "started_at": NOW,
+                "ended_at": NOW,
+                "duration_seconds": 0.0,
+                "checkpoint_key": "canonicalize:done",
+                "checkpoint_watermark": "wm",
+                "checkpoint_counts": {"records": 1},
+                "payload": {"must": "not pass"},
+            }
         )
 
 

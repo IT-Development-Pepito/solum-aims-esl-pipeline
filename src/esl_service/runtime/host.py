@@ -36,6 +36,18 @@ from esl_service.application.contracts import (
 )
 from esl_service.application.operations import AuthorizedOperations
 from esl_service.application.persist_run import PersistedRun, RunContext, persist_run
+from esl_service.application.run_evidence import (
+    ExceptionSummary,
+    IssueEvidenceRow,
+    IssueQuery,
+    IssueSummary,
+    MetricRunRow,
+    ReconciliationExceptionRow,
+    ReconciliationReportRow,
+    ReportQuery,
+    RunEvidenceRows,
+    RunEvidenceService,
+)
 from esl_service.application.runner import RunOutcome, WorkflowRunner
 from esl_service.config import (
     Settings,
@@ -59,6 +71,7 @@ from esl_service.persistence.evidence_repository import (
 from esl_service.persistence.launch_repository import LaunchRepository
 from esl_service.persistence.reconciliation_repository import ReconciliationRepository
 from esl_service.persistence.repository import ExecutionRepository
+from esl_service.persistence.run_evidence_repository import RunEvidenceRepository
 from esl_service.persistence.snapshot_repository import SnapshotRepository
 from esl_service.runtime.cli_operations import OperationsUnavailable
 from esl_service.runtime.connectivity import SqlAlchemyConnector, build_probes
@@ -154,6 +167,41 @@ class TransactionalPorts:
         with self._scope() as session:
             return ExecutionRepository(session).query_executions(query)
 
+    # RunEvidencePort (#109): every read bounded in SQL, one transaction each
+    def execution_exists(self, execution_id: UUID) -> bool:
+        with self._scope() as session:
+            return RunEvidenceRepository(session).execution_exists(execution_id)
+
+    def issue_summary_for(self, execution_id: UUID, query: IssueQuery) -> IssueSummary:
+        with self._scope() as session:
+            return RunEvidenceRepository(session).issue_summary_for(execution_id, query)
+
+    def issue_page_for(self, execution_id: UUID, query: IssueQuery) -> Sequence[IssueEvidenceRow]:
+        with self._scope() as session:
+            return RunEvidenceRepository(session).issue_page_for(execution_id, query)
+
+    def latest_report_for(self, execution_id: UUID) -> ReconciliationReportRow | None:
+        with self._scope() as session:
+            return RunEvidenceRepository(session).latest_report_for(execution_id)
+
+    def exception_summary_for(self, report_id: UUID, query: ReportQuery) -> ExceptionSummary:
+        with self._scope() as session:
+            return RunEvidenceRepository(session).exception_summary_for(report_id, query)
+
+    def exception_page_for(
+        self, report_id: UUID, query: ReportQuery
+    ) -> Sequence[ReconciliationExceptionRow]:
+        with self._scope() as session:
+            return RunEvidenceRepository(session).exception_page_for(report_id, query)
+
+    def run_evidence_for(self, execution_id: UUID) -> RunEvidenceRows:
+        with self._scope() as session:
+            return RunEvidenceRepository(session).run_evidence_for(execution_id)
+
+    def metric_evidence(self, *, per_scope_limit: int) -> Sequence[MetricRunRow]:
+        with self._scope() as session:
+            return RunEvidenceRepository(session).metric_evidence(per_scope_limit=per_scope_limit)
+
     # ReconciliationPort
     def finalize_report(
         self, execution_id: UUID, mode: ReconciliationMode, counts: ReconciliationCounts
@@ -229,6 +277,7 @@ class Host:
     settings: Settings
     ports: TransactionalPorts
     operations: AuthorizedOperations
+    run_evidence: RunEvidenceService
     health: HealthService
     scheduler: Scheduler
     ticker: ThreadedTicker
@@ -255,11 +304,29 @@ def launch_context(settings: Settings | None = None) -> LaunchContext:
     )
 
 
-def build_operations(settings: Settings | None = None) -> AuthorizedOperations:
-    settings = settings or load_settings()
-    ports = TransactionalPorts(_session_factory(settings))
+def _authorized_operations(ports: TransactionalPorts) -> AuthorizedOperations:
     return AuthorizedOperations(
         launches=ports, schedules=ports, status=ports, reconciliation=ports, audit=ports
+    )
+
+
+def build_operations(settings: Settings | None = None) -> AuthorizedOperations:
+    settings = settings or load_settings()
+    return _authorized_operations(TransactionalPorts(_session_factory(settings)))
+
+
+def build_run_evidence(
+    settings: Settings | None = None, *, ports: TransactionalPorts | None = None
+) -> RunEvidenceService:
+    """The #109 read service; pass ``ports`` to share one engine with the operations service."""
+
+    settings = settings or load_settings()
+    ports = ports or TransactionalPorts(_session_factory(settings))
+    return RunEvidenceService(
+        _authorized_operations(ports),
+        ports,
+        clock=lambda: datetime.now(UTC),
+        metrics_run_limit=settings.metrics_run_limit,
     )
 
 
@@ -283,6 +350,12 @@ def build_host(settings: Settings | None = None) -> Host:
     operations = AuthorizedOperations(
         launches=ports, schedules=ports, status=ports, reconciliation=ports, audit=ports
     )
+    run_evidence = RunEvidenceService(
+        operations,
+        ports,
+        clock=lambda: datetime.now(UTC),
+        metrics_run_limit=settings.metrics_run_limit,
+    )
     try:
         tokens = tokens_from_bundle(_secrets(settings))
     except SecretUnavailableError:
@@ -292,6 +365,7 @@ def build_host(settings: Settings | None = None) -> Host:
         settings=settings,
         ports=ports,
         operations=operations,
+        run_evidence=run_evidence,
         health=build_health(settings),
         scheduler=scheduler,
         ticker=ticker,
@@ -316,6 +390,7 @@ def run_foreground(settings: Settings | None = None) -> None:
         health=host.health,
         scheduler=host.scheduler,
         audit=host.ports,
+        run_evidence=host.run_evidence,
         configuration_version_id=host.context.configuration_version_id,
         mode=host.context.mode,
     )
@@ -507,10 +582,3 @@ def build_worker(settings: Settings | None = None) -> WorkerLoop:
         interval_seconds=WORKER_INTERVAL_SECONDS,
         on_start=runner.recover_all,
     )
-
-
-def execution_steps(execution_id: UUID, settings: Settings | None = None) -> Sequence[Any]:
-    """The steps and checkpoints of one run, for ``runs show``."""
-
-    settings = settings or load_settings()
-    return RunnerPorts(_session_factory(settings)).step_history(execution_id)
