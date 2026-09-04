@@ -34,6 +34,8 @@ class TriggerType(StrEnum):
     MANUAL = "MANUAL"
     RETRY = "RETRY"
     REPLAY = "REPLAY"
+    #: A replay from the retained canonical snapshot, reading no source (#114).
+    SNAPSHOT_REPLAY = "SNAPSHOT_REPLAY"
     RECOVERY = "RECOVERY"
 
 

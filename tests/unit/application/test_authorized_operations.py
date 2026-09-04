@@ -76,6 +76,7 @@ class FakeLaunches:
     manual: list[dict[str, Any]] = field(default_factory=list)
     retries: list[tuple[UUID, RetryRequest]] = field(default_factory=list)
     replays: list[tuple[UUID, ReplayRequest]] = field(default_factory=list)
+    snapshot_replays: list[tuple[UUID, Any]] = field(default_factory=list)
     schedules: list[FakeSchedule] = field(default_factory=list)
     toggled: list[tuple[UUID, bool, str, str]] = field(default_factory=list)
 
@@ -90,6 +91,10 @@ class FakeLaunches:
     def launch_replay(self, execution_id: UUID, request: ReplayRequest, **_: Any) -> str:
         self.replays.append((execution_id, request))
         return "replayed"
+
+    def launch_snapshot_replay(self, execution_id: UUID, request: Any, **_: Any) -> str:
+        self.snapshot_replays.append((execution_id, request))
+        return "snapshot-replayed"
 
     def schedules_for_scope(
         self, workflow_name: str, store_code: str | None
@@ -433,3 +438,25 @@ def test_fallback_never_deletes_or_touches_executions(harness: Harness) -> None:
     assert harness.launches.retries == []
     assert harness.launches.replays == []
     assert harness.reconciliation.finalized == []
+
+
+# --- snapshot replay (#114) --------------------------------------------------------
+
+
+def test_snapshot_replay_is_a_replay_operation_carrying_identity_and_reason(harness: Harness) -> None:
+    origin = uuid4()
+
+    harness.service.replay_snapshot(OPERATOR, origin, "CHG-4 reproduce", correlation_id=uuid4())
+
+    ((execution_id, request),) = harness.launches.snapshot_replays
+    assert execution_id == origin
+    assert (request.requested_by, request.reason) == (OPERATOR.identity, "CHG-4 reproduce")
+
+
+def test_snapshot_replay_requires_a_reason_and_the_replay_role(harness: Harness) -> None:
+    with pytest.raises(InvalidOperationRequest):
+        harness.service.replay_snapshot(OPERATOR, uuid4(), "   ", correlation_id=uuid4())
+    with pytest.raises(NotAuthorized):
+        harness.service.replay_snapshot(NOBODY, uuid4(), "CHG-4", correlation_id=uuid4())
+
+    assert harness.launches.snapshot_replays == []

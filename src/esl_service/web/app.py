@@ -375,6 +375,16 @@ def create_app(
             operations.retry(caller, execution_id, body.reason, correlation_id=uuid4())
         )
 
+    @app.post("/runs/{execution_id}/replay-snapshot", status_code=202, response_model=LaunchResponse)
+    def replay_snapshot(execution_id: UUID, body: ReasonRequest, caller: Caller) -> LaunchResponse:
+        """Reproduce a run from its retained capture; no window, no source read (#114)."""
+
+        from uuid import uuid4
+
+        return _launch_response(
+            operations.replay_snapshot(caller, execution_id, body.reason, correlation_id=uuid4())
+        )
+
     @app.post("/runs/{execution_id}/replay", status_code=202, response_model=LaunchResponse)
     def replay(execution_id: UUID, body: WindowRequest, caller: Caller) -> LaunchResponse:
         from uuid import uuid4

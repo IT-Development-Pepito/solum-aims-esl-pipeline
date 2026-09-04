@@ -5,7 +5,8 @@ the caller's transaction. Persisted snapshots are the reproducible comparison
 input required by FR-027; no physical file participates.
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from typing import Protocol
 from uuid import UUID
 
 from sqlalchemy import select
@@ -20,6 +21,28 @@ from esl_service.persistence.models import (
     SnapshotSet,
     WorkflowExecution,
 )
+
+
+class StoredRecord(Protocol):
+    """What ``copy_record`` reads from a retained row; the ORM row satisfies it."""
+
+    @property
+    def store_code(self) -> str: ...
+
+    @property
+    def item_code(self) -> str: ...
+
+    @property
+    def selling_uom(self) -> str: ...
+
+    @property
+    def canonical_schema_version(self) -> str: ...
+
+    @property
+    def canonical_hash(self) -> str: ...
+
+    @property
+    def payload(self) -> Mapping[str, object]: ...
 
 
 class SnapshotRepository:
@@ -70,6 +93,31 @@ class SnapshotRepository:
         snapshot_set.record_count += 1
         self._session.flush()
         return stored
+
+    def copy_record(
+        self, snapshot_set_id: UUID, stored: "StoredRecord"
+    ) -> CanonicalRecordSnapshot:
+        """Re-persist one retained record verbatim into another capture (#114).
+
+        A snapshot replay reads no source, so the record's canonical payload
+        and hash are copied as retained rather than re-serialised; whether the
+        capture's aggregate hash then reproduces is the replay's evidence.
+        """
+
+        snapshot_set = self._session.get_one(SnapshotSet, snapshot_set_id)
+        copied = CanonicalRecordSnapshot(
+            snapshot_set_id=snapshot_set_id,
+            store_code=stored.store_code,
+            item_code=stored.item_code,
+            selling_uom=stored.selling_uom,
+            canonical_schema_version=stored.canonical_schema_version,
+            canonical_hash=stored.canonical_hash,
+            payload=dict(stored.payload),
+        )
+        self._session.add(copied)
+        snapshot_set.record_count += 1
+        self._session.flush()
+        return copied
 
     def append_difference(
         self,

@@ -164,6 +164,15 @@ The implementation rejects an overlapping scope; it must not run two owners conc
 3. Use **`esl-admin runs replay <execution-id> --window-start <iso-instant> --window-end <iso-instant> --reason <ticket>`** or **`POST /runs/{execution-id}/replay`**. The replay inherits the workflow, store, and mode of the original run and carries exactly the window given; both bounds are mandatory.
 4. Reconcile the replay against original and target outcomes; preserve both audit trails.
 
+### Reproduce a run from its retained snapshot
+
+This is not the window replay above. A snapshot replay (#114) reads **no source**: raw source rows are not retained (AD-005), so it cannot re-canonicalize or re-evaluate promotions. It re-persists the original run's finalized canonical capture under the original's own window, configuration version, and rule version, and proves two things from durable state alone: that the capture's aggregate hash reproduces, and how that capture differs from the store's current expected state. It never intends an action.
+
+1. Use **`esl-admin runs replay-snapshot <execution-id> --reason <ticket>`** or **`POST /runs/{execution-id}/replay-snapshot`** with a reason only; the replay role applies. The new run carries trigger type `SNAPSHOT_REPLAY` and links to the original.
+2. The request is refused, and the refusal audited, when the original's finalized `SOURCE_EXPECTED` capture no longer exists (`SNAPSHOT_EVIDENCE_MISSING`, for example after evidence retention purged it) or its latest reconciliation report is not final (`RECONCILIATION_UNRESOLVED`).
+3. The run has one step, `replay-snapshot`. Its `SNAPSHOT_REPLAYED` event records the source capture, both aggregate hashes, and `hash_reproduced`; a run whose hash did not reproduce ends `SUCCEEDED_WITH_EXCEPTIONS`, which means the retained evidence or the canonical serializer changed and must be investigated before any parity claim.
+4. Read the replay's reconciliation report: `extracted` and `valid` are the retained records; `eligible`/`unchanged` are those identical to the store's current expected state; `ineligible` are those that differ, with the path-level detail in its difference rows; `intended` is always zero.
+
 ### Determine whether data reached AIMS
 
 1. Review per-record action ledger and adapter response/acknowledgement for the execution ID.

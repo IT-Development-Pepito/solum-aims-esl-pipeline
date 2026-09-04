@@ -29,10 +29,14 @@ from sqlalchemy.orm import Session
 from esl_service.domain.actions import ActionState
 from esl_service.domain.operations import (
     WORKFLOW_RETRY_REFUSED,
+    WORKFLOW_SNAPSHOT_REPLAY_REFUSED,
     ReplayRequest,
     RetryRefusalReason,
     RetryRequest,
+    SnapshotReplayRefusalReason,
+    SnapshotReplayRequest,
     decide_retry,
+    decide_snapshot_replay,
 )
 from esl_service.domain.outcomes import ExecutionMode, NewExecution, TriggerType
 from esl_service.domain.ownership import (
@@ -62,8 +66,10 @@ from esl_service.domain.scheduling import (
 from esl_service.domain.serialization import JSONValue
 from esl_service.domain.workflow import ExecutionStatus
 from esl_service.persistence.models import (
+    ReconciliationReport,
     RecordAction,
     ScopeLease,
+    SnapshotSet,
     WorkflowExecution,
     WorkflowSchedule,
 )
@@ -100,7 +106,7 @@ class LaunchResult:
     execution: WorkflowExecution | None
     schedule_refusal: LaunchRefusalReason | None = None
     ownership: OwnershipDecision | None = None
-    control_refusal: RetryRefusalReason | None = None
+    control_refusal: RetryRefusalReason | SnapshotReplayRefusalReason | None = None
 
     @property
     def launched(self) -> bool:
@@ -415,6 +421,86 @@ class LaunchRepository:
                 "replay_of_execution_id": str(original.id),
                 "source_window_start": request.source_window_start.isoformat(),
                 "source_window_end": request.source_window_end.isoformat(),
+            },
+            now=now or datetime.now(UTC),
+        )
+
+    def launch_snapshot_replay(
+        self,
+        execution_id: UUID,
+        request: SnapshotReplayRequest,
+        *,
+        correlation_id: UUID,
+        now: datetime | None = None,
+    ) -> LaunchResult:
+        """Create a linked replay that reproduces a run from its retained capture (#114).
+
+        No source is read, so the original's window, configuration version, and
+        rule version apply unchanged. Refused, and the refusal audited, when the
+        original's finalized SOURCE_EXPECTED capture is gone or its latest
+        reconciliation report is not final.
+        """
+
+        original = self._execution(execution_id)
+        capture = self._session.scalars(
+            select(SnapshotSet).where(
+                SnapshotSet.execution_id == original.id,
+                SnapshotSet.representation_kind == "SOURCE_EXPECTED",
+            )
+        ).first()
+        latest_report = self._session.scalars(
+            select(ReconciliationReport)
+            .where(ReconciliationReport.execution_id == original.id)
+            .order_by(ReconciliationReport.revision.desc())
+            .limit(1)
+        ).first()
+        decision = decide_snapshot_replay(
+            has_finalized_snapshot=capture is not None and capture.aggregate_hash is not None,
+            report_finalized=latest_report is not None and latest_report.finalized_at is not None,
+        )
+        if not decision.allowed:
+            assert decision.refusal is not None
+            self._audit.append_audit_entry(
+                actor=request.requested_by,
+                action=WORKFLOW_SNAPSHOT_REPLAY_REFUSED,
+                reason=request.reason,
+                resource_type=EXECUTION_RESOURCE,
+                resource_key=str(original.id),
+                outcome=decision.refusal.value,
+                execution_id=original.id,
+                configuration_version_id=original.configuration_version_id,
+                correlation_id=correlation_id,
+                after_evidence={
+                    "reason_code": decision.refusal.value,
+                    "status": original.status,
+                    "has_finalized_snapshot": capture is not None and capture.aggregate_hash is not None,
+                    "report_revision": None if latest_report is None else latest_report.revision,
+                },
+            )
+            return LaunchResult(execution=None, control_refusal=decision.refusal)
+
+        assert capture is not None
+        return self._launch(
+            NewExecution(
+                workflow_name=original.workflow_name,
+                store_code=original.store_code,
+                trigger_type=TriggerType.SNAPSHOT_REPLAY,
+                mode=ExecutionMode(original.mode),
+                correlation_id=correlation_id,
+                source_window_start=original.source_window_start,
+                source_window_end=original.source_window_end,
+                configuration_version_id=original.configuration_version_id,
+                rule_version=original.rule_version,
+                requested_by=request.requested_by,
+                reason=request.reason,
+                replay_of_execution_id=original.id,
+            ),
+            actor=request.requested_by,
+            reason=request.reason,
+            extra_evidence={
+                "replay_of_execution_id": str(original.id),
+                "source_snapshot_set_id": str(capture.id),
+                "source_aggregate_hash": capture.aggregate_hash,
             },
             now=now or datetime.now(UTC),
         )

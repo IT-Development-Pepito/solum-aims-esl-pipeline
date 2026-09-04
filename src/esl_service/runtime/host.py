@@ -36,6 +36,11 @@ from esl_service.application.contracts import (
 )
 from esl_service.application.operations import AuthorizedOperations
 from esl_service.application.persist_run import PersistedRun, RunContext, persist_run
+from esl_service.application.replay import (
+    ReplayContext,
+    ReplayedRun,
+    replay_from_snapshot,
+)
 from esl_service.application.run_evidence import (
     ExceptionSummary,
     IssueEvidenceRow,
@@ -56,7 +61,12 @@ from esl_service.config import (
     validate_startup_configuration,
 )
 from esl_service.domain.authorization import Principal
-from esl_service.domain.operations import ExecutionQuery, ReplayRequest, RetryRequest
+from esl_service.domain.operations import (
+    ExecutionQuery,
+    ReplayRequest,
+    RetryRequest,
+    SnapshotReplayRequest,
+)
 from esl_service.domain.outcomes import ExecutionMode
 from esl_service.domain.promotion_selection import SELECTION_STRATEGY_VERSION
 from esl_service.domain.reconciliation import ReconciliationCounts, ReconciliationMode
@@ -148,6 +158,14 @@ class TransactionalPorts:
     def launch_replay(self, execution_id: UUID, request: ReplayRequest, *, correlation_id: UUID) -> Any:
         with self._scope() as session:
             return LaunchRepository(session).launch_replay(
+                execution_id, request, correlation_id=correlation_id
+            )
+
+    def launch_snapshot_replay(
+        self, execution_id: UUID, request: SnapshotReplayRequest, *, correlation_id: UUID
+    ) -> Any:
+        with self._scope() as session:
+            return LaunchRepository(session).launch_snapshot_replay(
                 execution_id, request, correlation_id=correlation_id
             )
 
@@ -498,6 +516,18 @@ class RunnerPorts(TransactionalPorts):
                 step_id=step_id,
             )
 
+    def replay(self, context: ReplayContext, *, step_id: UUID | None = None) -> ReplayedRun:
+        """The #114 step in one transaction: retained evidence in, no source read."""
+
+        with self._scope() as session:
+            return replay_from_snapshot(
+                context,
+                executions=ExecutionRepository(session),
+                snapshots=SnapshotRepository(session),
+                reconciliation=ReconciliationRepository(session),
+                step_id=step_id,
+            )
+
 
 class LiveSources:
     """The four tiers behind their adapters (#91 to #94), built per call.
@@ -562,6 +592,7 @@ def build_runner(settings: Settings | None = None) -> tuple[WorkflowRunner, Runn
         sources=LiveSources(settings),
         retry_policy=build_retry_policy(settings),
         persist=ports.persist,
+        replay=ports.replay,
     )
     return runner, ports
 

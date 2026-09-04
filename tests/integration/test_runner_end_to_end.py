@@ -1,4 +1,4 @@
-"""One execution from launch to a terminal state against the real state store (#102).
+﻿"""One execution from launch to a terminal state against the real state store (#102).
 
 The sources are fakes; everything else is real: the #15 launch takes the
 scope, the runner drives the #14 graph through the repository, steps and
@@ -30,6 +30,7 @@ from esl_service.application.contracts import (
 )
 from esl_service.application.persist_run import persist_run
 from esl_service.application.recovery import report_for
+from esl_service.application.replay import replay_from_snapshot
 from esl_service.application.runner import (
     RUN_STEPS,
     STEP_READ_STORE,
@@ -117,11 +118,18 @@ def runner_parts(session: Session) -> tuple[ExecutionRepository, WorkflowRunner,
         actions=ActionRepository(session),
         reconciliation=ReconciliationRepository(session),
     )
+    replay = partial(
+        replay_from_snapshot,
+        executions=executions,
+        snapshots=SnapshotRepository(session),
+        reconciliation=ReconciliationRepository(session),
+    )
     runner = WorkflowRunner(
         executions=executions,
         sources=sources,
         retry_policy=POLICY,
         persist=persist,
+        replay=replay,
         clock=lambda: datetime(2026, 9, 2, 0, 31, tzinfo=UTC),
         jitter=lambda: 0.0,
         store_timezone="Asia/Jakarta",
@@ -261,3 +269,44 @@ def test_the_recovery_report_of_a_waiting_run_names_its_checkpoint_and_due_time(
     assert report.resume_from == STEP_READ_STORE
     assert report.external_uncertainty == ()
     assert report.next_operator_action.startswith("None: the retry is due at 2026-09-02T00:31:01+00:00")
+
+
+# --- snapshot replay (#114) --------------------------------------------------------
+
+
+def test_a_snapshot_replay_reproduces_the_capture_through_the_runner_without_a_source_call(
+    session: Session, runner_parts: tuple[ExecutionRepository, WorkflowRunner, FakeSources], configuration_version_id: UUID
+) -> None:
+    from esl_service.application.replay import (
+        EVENT_SNAPSHOT_REPLAYED,
+        STEP_REPLAY_SNAPSHOT,
+    )
+    from esl_service.domain.operations import SnapshotReplayRequest
+    from esl_service.persistence.models import ExecutionEvent
+
+    _executions, runner, sources = runner_parts
+    original_id = launch(session, configuration_version_id)
+    assert runner.run(original_id).status is ExecutionStatus.SUCCEEDED_WITH_EXCEPTIONS
+    launched = LaunchRepository(session).launch_snapshot_replay(
+        original_id, SnapshotReplayRequest(requested_by="ops.alice", reason="INC-9"), correlation_id=uuid4()
+    )
+    assert launched.execution is not None
+    session.flush()
+    sources.calls.clear()
+
+    outcome = runner.run(launched.execution.id)
+
+    session.expire_all()
+    assert outcome.status is ExecutionStatus.SUCCEEDED
+    assert outcome.steps == (STEP_REPLAY_SNAPSHOT,)
+    assert sources.calls == []  # retained evidence only
+    original_set = session.scalars(select(SnapshotSet).where(SnapshotSet.execution_id == original_id)).one()
+    replay_set = session.scalars(select(SnapshotSet).where(SnapshotSet.execution_id == launched.execution.id)).one()
+    assert replay_set.aggregate_hash == original_set.aggregate_hash
+    event = session.scalars(
+        select(ExecutionEvent).where(
+            ExecutionEvent.execution_id == launched.execution.id,
+            ExecutionEvent.event_type == EVENT_SNAPSHOT_REPLAYED,
+        )
+    ).one()
+    assert event.payload["hash_reproduced"] is True

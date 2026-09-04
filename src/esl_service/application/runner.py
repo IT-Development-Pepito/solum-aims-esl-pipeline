@@ -46,13 +46,19 @@ from esl_service.application.contracts import (
     WarehouseReadResult,
 )
 from esl_service.application.persist_run import PersistedRun, RunContext, persist_run
+from esl_service.application.replay import (
+    STEP_REPLAY_SNAPSHOT,
+    ReplayContext,
+    ReplayedRun,
+    replay_from_snapshot,
+)
 from esl_service.domain.failures import (
     FailureSignal,
     RetryPolicy,
     UnclassifiedFailure,
     classify,
 )
-from esl_service.domain.outcomes import ExecutionMode, FailureClass
+from esl_service.domain.outcomes import ExecutionMode, FailureClass, TriggerType
 from esl_service.domain.ownership import scope_key
 from esl_service.domain.workflow import ExecutionStatus, StepOutcome, is_terminal
 
@@ -123,6 +129,12 @@ class ExecutionRow(Protocol):
 
     @property
     def rule_version(self) -> str: ...
+
+    @property
+    def trigger_type(self) -> str: ...
+
+    @property
+    def replay_of_execution_id(self) -> UUID | None: ...
 
 
 class CheckpointRow(Protocol):
@@ -212,6 +224,7 @@ class SourcePort(Protocol):
 
 Canonicalizer = Callable[..., CanonicalizationResult]
 Persister = Callable[..., PersistedRun]
+Replayer = Callable[..., ReplayedRun]
 
 
 # --- outcome --------------------------------------------------------------------------
@@ -237,6 +250,7 @@ class _RunState:
     canonical: CanonicalizationResult | None = None
     baseline: BaselineReadResult | None = None
     persisted: PersistedRun | None = None
+    replayed: ReplayedRun | None = None
 
 
 class _Stop(Exception):
@@ -261,6 +275,7 @@ class WorkflowRunner:
         retry_policy: RetryPolicy,
         canonicalize: Canonicalizer = canonicalize_store,
         persist: Persister = persist_run,
+        replay: Replayer = replay_from_snapshot,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
         jitter: Callable[[], float] = random.random,
         store_timezone: str = "Asia/Jakarta",
@@ -270,6 +285,7 @@ class WorkflowRunner:
         self._policy = retry_policy
         self._canonicalize = canonicalize
         self._persist = persist
+        self._replay = replay
         self._clock = clock
         self._jitter = jitter
         self._zone = ZoneInfo(store_timezone)
@@ -321,8 +337,14 @@ class WorkflowRunner:
         executed: list[str] = []
         skipped: list[str] = []
 
+        # A snapshot replay (#114) reads no source: one step, from retained evidence.
+        steps = (
+            (STEP_REPLAY_SNAPSHOT,)
+            if TriggerType(execution.trigger_type) is TriggerType.SNAPSHOT_REPLAY
+            else RUN_STEPS
+        )
         try:
-            for step_name in RUN_STEPS:
+            for step_name in steps:
                 prior = history.get(step_name)
                 attempt = (prior.attempt if prior is not None else 0) + 1
                 if prior is not None and prior.outcome == StepOutcome.SUCCEEDED.value and self._restore(step_name, prior, state):
@@ -379,6 +401,30 @@ class WorkflowRunner:
         self, execution: ExecutionRow, window: SourceWindow, step_name: str, step_id: UUID, state: _RunState
     ) -> tuple[dict[str, object], str]:
         store_code = execution.store_code
+        if step_name == STEP_REPLAY_SNAPSHOT:
+            assert execution.replay_of_execution_id is not None
+            state.replayed = self._replay(
+                ReplayContext(
+                    execution_id=execution.id,
+                    replay_of_execution_id=execution.replay_of_execution_id,
+                    store_code=store_code,
+                    mode=ExecutionMode(execution.mode),
+                    rule_version=execution.rule_version,
+                ),
+                step_id=step_id,
+            )
+            replayed = state.replayed
+            return (
+                {
+                    "source_snapshot_set_id": str(replayed.source_snapshot_set_id),
+                    "snapshot_set_id": str(replayed.snapshot_set_id),
+                    "report_id": str(replayed.report_id),
+                    "records": replayed.records,
+                    "hash_reproduced": replayed.hash_reproduced,
+                    "resumed": replayed.resumed,
+                },
+                str(replayed.snapshot_set_id),
+            )
         if step_name == STEP_DISCOVER:
             entry = self._sources.discover_store(store_code, window)
             if entry is None:
@@ -504,9 +550,12 @@ class WorkflowRunner:
     def _had_exceptions(state: _RunState) -> bool:
         counts = state.canonical.counts if state.canonical is not None else None
         baseline = state.persisted.baseline if state.persisted is not None else None
+        replayed = state.replayed
         return bool(
             (counts is not None and (counts.rejected > 0 or counts.unresolved > 0))
             or (baseline is not None and (baseline.mismatched or baseline.missing_in_legacy or baseline.only_in_legacy))
+            # A capture whose hash did not reproduce is a finding the operator must see.
+            or (replayed is not None and not replayed.hash_reproduced)
         )
 
 

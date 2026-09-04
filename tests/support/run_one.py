@@ -61,6 +61,7 @@ def build(database_url: str, die_after: str | None) -> tuple[WorkflowRunner, Kil
         sources=ScriptedSources(),
         retry_policy=POLICY,
         persist=ports.persist,
+        replay=ports.replay,
         clock=lambda: CLOCK,
         jitter=lambda: 0.0,
     )

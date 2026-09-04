@@ -87,6 +87,8 @@ class FakeExecution:
     rule_version: str = "compatibility-v1"
     correlation_id: UUID = field(default_factory=uuid4)
     retry_not_before: datetime | None = None
+    trigger_type: str = "MANUAL"
+    replay_of_execution_id: UUID | None = None
 
 
 @dataclass
@@ -508,3 +510,60 @@ def test_canonicalize_records_the_counts_in_its_checkpoint() -> None:
     step = next(s for s in harness.executions.steps if s.step_name == STEP_CANONICALIZE)
     assert step.checkpoints[-1].payload["extracted"] == 1
     assert step.checkpoints[-1].payload["records"] == 1
+
+
+# --- snapshot replay (#114) --------------------------------------------------------
+
+
+@dataclass
+class FakeReplay:
+    calls: list[dict[str, Any]] = field(default_factory=list)
+    hash_reproduced: bool = True
+
+    def __call__(self, context: Any, *, step_id: UUID | None = None, **_: Any) -> Any:
+        from esl_service.application.replay import ReplayedRun
+
+        self.calls.append({"context": context, "step_id": step_id})
+        return ReplayedRun(uuid4(), uuid4(), uuid4(), 2, self.hash_reproduced, DiffCounts(0, 0, 0, 2), False)
+
+
+def test_a_snapshot_replay_runs_one_step_and_never_touches_a_source() -> None:
+    """#114: the replay reads retained evidence only; a source call would be a defect."""
+
+    from esl_service.application.replay import STEP_REPLAY_SNAPSHOT
+
+    replay = FakeReplay()
+    harness = build()
+    harness.runner = WorkflowRunner(
+        executions=harness.executions, sources=harness.sources, retry_policy=POLICY,
+        persist=harness.persist, replay=replay, clock=lambda: datetime(2026, 9, 2, 0, 31, tzinfo=UTC), jitter=lambda: 0.0,
+    )
+    original = uuid4()
+    execution = queued(harness, trigger_type="SNAPSHOT_REPLAY", replay_of_execution_id=original)
+
+    outcome = harness.runner.run(execution.id)
+
+    assert outcome.status is ExecutionStatus.SUCCEEDED
+    assert outcome.steps == (STEP_REPLAY_SNAPSHOT,)
+    assert harness.sources.calls == []
+    assert harness.persist.calls == []
+    assert replay.calls[0]["context"].replay_of_execution_id == original
+    assert replay.calls[0]["context"].store_code == "084"
+    assert replay.calls[0]["step_id"] is not None
+    checkpoint_keys = [c.checkpoint_key for step in harness.executions.steps for c in step.checkpoints]
+    assert f"{STEP_REPLAY_SNAPSHOT}:done" in checkpoint_keys
+    assert harness.executions.released == ["esl-refresh:084"]
+
+
+def test_a_snapshot_replay_whose_hash_did_not_reproduce_succeeds_with_exceptions() -> None:
+    replay = FakeReplay(hash_reproduced=False)
+    harness = build()
+    harness.runner = WorkflowRunner(
+        executions=harness.executions, sources=harness.sources, retry_policy=POLICY,
+        persist=harness.persist, replay=replay, clock=lambda: datetime(2026, 9, 2, 0, 31, tzinfo=UTC), jitter=lambda: 0.0,
+    )
+    execution = queued(harness, trigger_type="SNAPSHOT_REPLAY", replay_of_execution_id=uuid4())
+
+    outcome = harness.runner.run(execution.id)
+
+    assert outcome.status is ExecutionStatus.SUCCEEDED_WITH_EXCEPTIONS
