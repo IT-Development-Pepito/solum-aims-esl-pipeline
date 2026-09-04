@@ -33,7 +33,7 @@ from esl_service.persistence.snapshot_repository import SnapshotRepository
 FORBIDDEN_DATABASE_NAMES = frozenset({"postgres", "template0", "template1"})
 
 #: Revision the integration suite expects the dedicated database to carry.
-REQUIRED_REVISION = "0008_authoritative_model_gate"
+REQUIRED_REVISION = "0009_relax_action_evidence_links"
 
 _REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 

@@ -37,6 +37,7 @@ from esl_service.persistence.models import (
     ExecutionStep,
     PromotionCandidateSnapshot,
     PromotionEvaluation,
+    ReconciliationException,
     ReconciliationReport,
     RecordAction,
     RecordDifference,
@@ -270,6 +271,53 @@ class RetentionService:
                 delete(ExecutionEvent).where(
                     ExecutionEvent.execution_id == execution_id
                 ),
+            )
+        )
+        # The audit core keeps its actions, so the links pointing down into the
+        # detailed rows are nulled before those rows go (0009, #64). The action
+        # remains interpretable from its own business key and idempotency key.
+        self._session.execute(
+            update(RecordAction)
+            .where(RecordAction.execution_id == execution_id)
+            .values(record_processing_result_id=None)
+        )
+        self._session.execute(
+            update(RecordProcessingResult)
+            .where(RecordProcessingResult.execution_id == execution_id)
+            .values(canonical_record_snapshot_id=None)
+        )
+        # A reconciliation exception is audit core and survives the purge, but it
+        # also points at the detailed row. That link was already nullable, so it
+        # needs no migration, only the same deliberate release (#64).
+        self._session.execute(
+            update(ReconciliationException)
+            .where(ReconciliationException.record_processing_result_id.in_(results))
+            .values(record_processing_result_id=None)
+        )
+        counts.append(
+            self._delete(
+                "record_processing_result",
+                delete(RecordProcessingResult).where(
+                    RecordProcessingResult.execution_id == execution_id
+                ),
+            )
+        )
+        counts.append(
+            self._delete(
+                "canonical_record_snapshot",
+                delete(CanonicalRecordSnapshot).where(
+                    CanonicalRecordSnapshot.snapshot_set_id.in_(
+                        select(SnapshotSet.id).where(
+                            SnapshotSet.execution_id == execution_id
+                        )
+                    )
+                ),
+            )
+        )
+        counts.append(
+            self._delete(
+                "snapshot_set",
+                delete(SnapshotSet).where(SnapshotSet.execution_id == execution_id),
             )
         )
         self._session.flush()

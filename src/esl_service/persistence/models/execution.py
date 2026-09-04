@@ -212,10 +212,13 @@ class RecordAction(Base):
         ForeignKey("workflow_execution.id", ondelete="RESTRICT"),
         nullable=False,
     )
-    record_processing_result_id: Mapped[UUID] = mapped_column(
+    # Optional since 0009 (#64): a retention purge nulls this link so the
+    # detailed row beneath it can be deleted. The action stays interpretable
+    # from its own business key, desired state, and idempotency key.
+    record_processing_result_id: Mapped[UUID | None] = mapped_column(
         PostgreSQLUUID(as_uuid=True),
         ForeignKey("record_processing_result.id", ondelete="RESTRICT"),
-        nullable=False,
+        nullable=True,
     )
     store_code: Mapped[str] = mapped_column(String(20), nullable=False)
     item_code: Mapped[str] = mapped_column(String(50), nullable=False)
