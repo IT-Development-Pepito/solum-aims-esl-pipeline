@@ -34,7 +34,7 @@ The bundle on disk is ciphertext. You never edit it by hand. You populate it wit
 
 One read-only account covers every SQL Server tier, so one key serves all of them, including per-store servers whose addresses are read from `DimStore` at run time.
 
-A fifth kind of key is not a password: `api.token.<account>` holds the bearer token one account uses to call the internal operations API (#28, AD-019). Provision it the same way, `esl-admin secrets set api.token.<account> --reason <ticket>`, and give the account a role in `ESL_OPERATOR_ROLES`; see `docs/WORKFLOW.md`, "Provision an API token".
+A fifth kind of key is not a password: `api.token.<account>` holds the bearer token one account uses to call the internal operations API (#28, AD-019). You do not generate this one yourself: `esl-admin secrets issue-token <account> --reason <ticket> --out <path>` creates it, stores it, and reveals it once, and running it again rotates it. Give the account a role in `ESL_OPERATOR_ROLES` too; see `docs/WORKFLOW.md`, "Provision an API token".
 
 ### Raw or encoded?
 
@@ -61,7 +61,8 @@ The startup gate refuses an `ESL_DATABASE_URL` that still embeds a password, so 
 3. esl-admin secrets set  x 4          one command per key, see below
 4. alembic upgrade head                migrates the state store; password comes from state.password
 5. esl-admin check-connections         every target must be REACHABLE or UNCONFIGURED
-6. start the service
+6. esl-admin secrets issue-token       one per API account; or -IssueTokensFor at install time
+7. start the service
 ```
 
 Step 4 needs no password in `ESL_DATABASE_URL`: Alembic resolves `state.password` from the bundle exactly as the service does. Until it has run, `secrets set` still stores the secret but warns that the audit entry could not be recorded because the schema is not migrated.

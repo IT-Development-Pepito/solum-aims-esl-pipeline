@@ -335,3 +335,136 @@ def test_check_connections_never_prints_a_connection_string(
 
     assert "postgresql://" not in result.output
     assert ":pw@" not in result.output
+
+
+# --- secrets issue-token (#98) ------------------------------------------------
+
+
+def issue(bundle: Path, account: str = "ops.alice", *extra: str) -> object:
+    return runner.invoke(
+        cli.app,
+        ["secrets", "issue-token", account, "--bundle", str(bundle),
+         "--reason", "CHG-9 provisioning", "--stdout", *extra],
+    )
+
+
+def test_issue_token_stores_it_under_the_account_and_reveals_it_once(bundle: Path) -> None:
+    """The one reveal channel is stdout here; the bundle holds the same value."""
+
+    result = issue(bundle)
+
+    assert result.exit_code == 0, result.output
+    stored = decoded(bundle)
+    assert list(stored) == ["api.token.ops.alice"]
+    token = stored["api.token.ops.alice"]
+    assert len(token) >= 43  # 32 random bytes, url-safe base64
+    assert token in result.output
+
+
+def test_a_reissued_token_replaces_the_previous_one(bundle: Path) -> None:
+    issue(bundle)
+    first = decoded(bundle)["api.token.ops.alice"]
+
+    result = issue(bundle)
+
+    second = decoded(bundle)["api.token.ops.alice"]
+    assert result.exit_code == 0, result.output
+    assert second != first
+    assert first not in result.output
+
+
+def test_a_rotated_token_is_audited_as_a_rotation_and_never_by_value(
+    bundle: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    entries: list[dict[str, object]] = []
+    monkeypatch.setattr(cli, "_record_audit", lambda **fields: entries.append(fields) or None)
+
+    issue(bundle)
+    first_token = decoded(bundle)["api.token.ops.alice"]
+    issue(bundle)
+    second_token = decoded(bundle)["api.token.ops.alice"]
+
+    assert [entry["action"] for entry in entries] == ["secret.set", "secret.set"]
+    assert all(entry["resource_key"] == "api.token.ops.alice" for entry in entries)
+    rendered = repr(entries)
+    assert first_token not in rendered and second_token not in rendered
+
+
+def test_issue_token_writes_a_protected_file_and_refuses_to_overwrite(
+    bundle: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    protected: list[Path] = []
+
+    class RecordingProtector:
+        def protect(self, path: Path, service_identity_sid: str | None) -> None:
+            protected.append(path)
+
+    monkeypatch.setattr(cli, "_protector", RecordingProtector)
+    out = tmp_path / "tokens" / "ops.alice.token"
+
+    result = runner.invoke(
+        cli.app,
+        ["secrets", "issue-token", "ops.alice", "--bundle", str(bundle),
+         "--reason", "CHG-9", "--out", str(out)],
+    )
+
+    assert result.exit_code == 0, result.output
+    token = decoded(bundle)["api.token.ops.alice"]
+    assert out.read_text(encoding="utf-8").strip() == token
+    assert out in protected  # the ACL was applied to the reveal file
+    assert token not in result.output  # --out is the only reveal channel
+
+    again = runner.invoke(
+        cli.app,
+        ["secrets", "issue-token", "ops.alice", "--bundle", str(bundle),
+         "--reason", "CHG-9", "--out", str(out)],
+    )
+
+    assert again.exit_code == 1
+    assert "exists" in again.output
+
+
+def test_issue_token_needs_one_reveal_channel(bundle: Path) -> None:
+    result = runner.invoke(
+        cli.app,
+        ["secrets", "issue-token", "ops.alice", "--bundle", str(bundle), "--reason", "r"],
+    )
+
+    assert result.exit_code == 2
+    assert "--stdout" in result.output and "--out" in result.output
+
+
+def test_issue_token_refuses_an_account_name_that_is_not_a_bundle_key(bundle: Path) -> None:
+    result = issue(bundle, "ops alice!")
+
+    assert result.exit_code == 1
+    assert "Refused" in result.output
+    assert not bundle.exists()
+
+
+def test_issue_token_warns_when_the_account_has_no_role(
+    bundle: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A token that authenticates and is then refused is a support call, not a setup."""
+
+    monkeypatch.setenv("ESL_OPERATOR_ROLES", "ops.bob=operator")
+
+    result = issue(bundle)
+
+    assert result.exit_code == 0, result.output
+    assert "ESL_OPERATOR_ROLES" in result.output
+    assert "ops.alice" in result.output
+
+
+def test_issue_token_is_refused_when_running_as_the_wrong_account(
+    bundle: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ESL_SERVICE_IDENTITY_SID", "S-1-5-21-9-9-9-9999")
+    monkeypatch.setenv("ESL_ENVIRONMENT", "production")
+    monkeypatch.setenv("ESL_DATABASE_URL", "postgresql+psycopg://esl@db:5432/esl")
+    monkeypatch.setenv("ESL_INTERNAL_HOST", "127.0.0.1")
+
+    result = issue(bundle)
+
+    assert result.exit_code == 2
+    assert not bundle.exists()

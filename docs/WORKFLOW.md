@@ -273,19 +273,24 @@ Stored secret 'state.password' in C:\ProgramData\SOLUM\ESL\secrets.dpapi.
 
 The internal API authenticates with per-account bearer tokens held in the DPAPI bundle (AD-019). One token per account, under the key `api.token.<account>`, where `<account>` is the bare Windows account name exactly as `ESL_OPERATOR_ROLES` names it.
 
-1. Generate a token of at least 32 random bytes on the host, for example `python -c "import secrets; print(secrets.token_urlsafe(32))"`. Hand it to the account holder through the approved channel; it is never printed by the service.
-2. Store it, as the service account: **`esl-admin secrets set api.token.<account> --reason <ticket>`**, pasting the token at the hidden prompt.
-3. Assign the account a role in `ESL_OPERATOR_ROLES`; a token without a role authenticates and is then refused for every operation, with the refusal audited under that account.
+1. Issue it, as the service account: **`esl-admin secrets issue-token <account> --reason <ticket> --out <path>`**. The command generates 32 random bytes, stores them under `api.token.<account>`, and writes the value to `<path>` with the bundle's own ACL (#98). Use `--stdout` instead when you are at the console and will copy the value straight into the approved channel; exactly one of the two is required, because a token nobody read is a token nobody can use.
+2. Hand the file to the account holder, then delete it. The value is revealed once and is nowhere else in plaintext: it is not in the audit entry, not in any log, and not recoverable from the bundle by any command. Losing it means issuing again.
+3. Assign the account a role in `ESL_OPERATOR_ROLES`; a token without a role authenticates and is then refused for every operation, with the refusal audited under that account. The command warns when the account it just issued for holds no role.
 4. Restart the service, or wait for the next start: tokens are read from the bundle when the host builds its authenticator.
-5. Revoke with **`esl-admin secrets remove api.token.<account> --reason <ticket>`** and a restart.
+5. **Rotate** by running the same command again with a fresh `--out` path. The previous token stops authenticating the moment the service reloads the bundle, so the restart is the cutover; the command says so when it replaced an existing key.
+6. Revoke with **`esl-admin secrets remove api.token.<account> --reason <ticket>`** and a restart.
+
+The command refuses to overwrite an existing `--out` file rather than risk discarding a token still in use, and it obeys the same identity guard as `secrets set`: in staging and production it must run as the account in `ESL_SERVICE_IDENTITY_SID`, because a user-scope DPAPI bundle written by anyone else is unreadable by the service.
 
 Calls carry `Authorization: Bearer <token>`. A missing or unknown token is `401` and is never logged; a role refusal is `403` and is already in `audit_entry`.
+
+Pasting a token you generated elsewhere still works — `esl-admin secrets set api.token.<account> --reason <ticket>` is unchanged — but it moves a secret through a clipboard and a half-typed prompt, and it cannot be scripted. Prefer `issue-token`.
 
 ### Install and control the Windows Service
 
 1. Deploy the approved artifact and create the virtual environment on the host (NFR-016). Set the production variables for the service account, including `ESL_INTERNAL_HOST`, `ESL_INTERNAL_PORT`, `ESL_OPERATOR_ROLES`, `ESL_SERVICE_IDENTITY_SID`, and `ESL_WINDOWS_SERVICE_NAME`.
-2. Write the bundle as the service account (previous sections), including `state.password` and every `api.token.<account>`.
-3. As an administrator run **`.\scripts\install-service.ps1 -PythonExe <venv>\Scripts\python.exe -ServiceAccount <account>`**. It registers `ESL_WINDOWS_SERVICE_NAME` (default `SOLUM_ESL_PIPELINE`) with automatic start; the password prompt is not stored.
+2. Write the bundle as the service account (previous sections), including `state.password`. API tokens can wait for step 3.
+3. As an administrator run **`.\scripts\install-service.ps1 -PythonExe <venv>\Scripts\python.exe -ServiceAccount <account>`**. It registers `ESL_WINDOWS_SERVICE_NAME` (default `SOLUM_ESL_PIPELINE`) with automatic start; the password prompt is not stored. Add **`-IssueTokensFor ops.alice,ops.bob -TokenDirectory <dir>`** to issue one token per account in the same pass: each is stored in the bundle and written to `<dir>\<account>.token` for you to hand over and delete. `<dir>` must already exist with an ACL you control, and running the install again with the same accounts rotates their tokens.
 4. Control it with `sc.exe start|stop|pause|continue <service>`. Start registers the active configuration version, resumes scheduling, and starts the API listener bound to `ESL_INTERNAL_HOST:ESL_INTERNAL_PORT`. Pause quiesces scheduling and keeps the process answering status. Stop pauses scheduling first, then stops the tick loop within its deadline; if the loop misses the deadline the `service.stopped` audit entry says so. Every transition is audited under the `service` actor.
 5. For development and diagnostics run the same host in the foreground with **`esl-admin serve`** under your own account; Ctrl+C stops it through the same lifecycle.
 
