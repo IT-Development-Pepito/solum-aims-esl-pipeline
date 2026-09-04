@@ -18,7 +18,7 @@ bundle, ACL, or database.
 import os
 import secrets as secrets_module
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from enum import StrEnum
 from pathlib import Path
 from typing import Annotated
@@ -132,6 +132,7 @@ def _record_audit(
     resource_key: str,
     settings: Settings | None,
     bundle: Path,
+    after_evidence: Mapping[str, bool] | None = None,
 ) -> AuditFailure | None:
     """Append an audit entry naming who, what, and why. Never the value.
 
@@ -159,6 +160,7 @@ def _record_audit(
                 resource_type="secret_bundle",
                 resource_key=resource_key,
                 outcome="APPLIED",
+                after_evidence=after_evidence,
             )
             session.commit()
     except Exception as error:  # noqa: BLE001 - classified, never echoed
@@ -288,7 +290,13 @@ _AUDIT_REMEDY = {
 
 
 def _audit_or_warn(
-    *, action: str, reason: str, name: str, settings: Settings | None, bundle: Path
+    *,
+    action: str,
+    reason: str,
+    name: str,
+    settings: Settings | None,
+    bundle: Path,
+    after_evidence: Mapping[str, bool] | None = None,
 ) -> None:
     failure = _record_audit(
         actor=current_user_name(),
@@ -297,6 +305,7 @@ def _audit_or_warn(
         resource_key=name,
         settings=settings,
         bundle=bundle,
+        after_evidence=after_evidence,
     )
     if failure is not None:
         typer.echo(
@@ -379,9 +388,20 @@ def secrets_issue_token(
     it never reaches the audit entry or any log.
     """
 
-    if bool(out) == stdout:
-        typer.echo("Refused: name exactly one reveal channel, --out <path> or --stdout.")
+    if out is not None and stdout:
+        typer.echo("Refused: name one reveal channel, --out <path> or --stdout, not both.")
         raise typer.Exit(code=2)
+    if out is None and not stdout:
+        # A console operator is a reveal channel and can just run the command.
+        # A pipe, a redirect, or a transcript is not one anyone chose, so the
+        # token is not written there by default.
+        if not _stdout_is_a_terminal():
+            typer.echo(
+                "Refused: standard output is not a terminal, so name a reveal channel, "
+                "--out <path> or --stdout."
+            )
+            raise typer.Exit(code=2)
+        stdout = True
 
     settings = _load_settings()
     sid = _guard_identity(settings)
@@ -428,14 +448,28 @@ def secrets_issue_token(
         typer.echo(token)
 
     _warn_when_account_has_no_role(account, settings)
+    # Both runs are the same action on the same key, so only the evidence tells
+    # the first provisioning of an account apart from a rotation that
+    # invalidated a token already in use.
     _audit_or_warn(
-        action="secret.set", reason=reason, name=name, settings=settings, bundle=path
+        action="secret.set",
+        reason=reason,
+        name=name,
+        settings=settings,
+        bundle=path,
+        after_evidence={"rotated": rotated},
     )
     if rotated:
         typer.echo(
             f"The previous token for '{account}' no longer authenticates. Restart the "
             "service so it reloads the bundle."
         )
+
+
+def _stdout_is_a_terminal() -> bool:
+    """Seam: a test drives both answers without owning a console."""
+
+    return sys.stdout.isatty()
 
 
 def _warn_when_account_has_no_role(account: str, settings: Settings | None) -> None:

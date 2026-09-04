@@ -390,6 +390,28 @@ def test_a_rotated_token_is_audited_as_a_rotation_and_never_by_value(
     assert first_token not in rendered and second_token not in rendered
 
 
+def test_the_rotation_is_visible_in_the_audit_evidence(
+    bundle: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """"Which of these two entries replaced a live token?" must be answerable.
+
+    Both runs are the same ``secret.set`` action on the same key, so without
+    evidence the ledger cannot distinguish the first provisioning of an account
+    from a rotation that invalidated a token already in use.
+    """
+
+    entries: list[dict[str, object]] = []
+    monkeypatch.setattr(cli, "_record_audit", lambda **fields: entries.append(fields) or None)
+
+    issue(bundle)
+    issue(bundle)
+
+    assert [entry["after_evidence"] for entry in entries] == [
+        {"rotated": False},
+        {"rotated": True},
+    ]
+
+
 def test_issue_token_writes_a_protected_file_and_refuses_to_overwrite(
     bundle: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -465,6 +487,38 @@ def test_issue_token_is_refused_when_running_as_the_wrong_account(
     monkeypatch.setenv("ESL_INTERNAL_HOST", "127.0.0.1")
 
     result = issue(bundle)
+
+    assert result.exit_code == 2
+    assert not bundle.exists()
+
+
+def test_a_terminal_reveals_the_token_without_naming_a_channel(
+    bundle: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """At a console the obvious command must work; the operator is the channel."""
+
+    monkeypatch.setattr(cli, "_stdout_is_a_terminal", lambda: True)
+
+    result = runner.invoke(
+        cli.app,
+        ["secrets", "issue-token", "ops.alice", "--bundle", str(bundle), "--reason", "CHG-1"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert decoded(bundle)["api.token.ops.alice"] in result.output
+
+
+def test_a_redirected_stdout_still_has_to_name_a_channel(
+    bundle: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A pipe or a transcript is not a reveal channel anyone chose."""
+
+    monkeypatch.setattr(cli, "_stdout_is_a_terminal", lambda: False)
+
+    result = runner.invoke(
+        cli.app,
+        ["secrets", "issue-token", "ops.alice", "--bundle", str(bundle), "--reason", "CHG-1"],
+    )
 
     assert result.exit_code == 2
     assert not bundle.exists()
